@@ -75,10 +75,18 @@ install -Dm644 fork/crates/zed/resources/zeo/hicolor/1024x1024/apps/dev.zeo.Zeo.
                                                      ~/.local/share/icons/hicolor/1024x1024/apps/dev.zeo.Zeo.png
 update-desktop-database ~/.local/share/applications 2>/dev/null || true
 gtk-update-icon-cache -f ~/.local/share/icons/hicolor 2>/dev/null || true
+kbuildsycoca6 2>/dev/null || true   # KDE: rebuild the desktop-file cache
 ```
 
 Wayland resolves the window icon by matching `app_id` (`dev.zeo.Zeo`) to the installed
 icon file name (`dev.zeo.Zeo.png`) and the `.desktop` filename.
+
+> **GOTCHA (found during the story-001 smoke).** On KDE the icon does **not** appear until
+> the caches are rebuilt — `kbuildsycoca6` for the desktop-file cache and
+> `gtk-update-icon-cache` for the icon theme. A missing icon after install is almost always
+> a stale cache, not a wrong `app_id`. Also note `hicolor/index.theme` declares sizes only up
+> to `512x512/apps`: the 1024 px asset is a master and is never used by theme lookup (the
+> overlay Zed ships icons the same way).
 
 ## 6. Deferred to story 007 (packaging)
 
