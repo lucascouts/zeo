@@ -78,26 +78,48 @@ fi
 
 pre_sha="$("${git_in_repo[@]}" rev-parse "$BRANCH")"
 "${git_in_repo[@]}" tag -f "$TAG" "$pre_sha" >/dev/null
+pre_short="${pre_sha:0:12}"
 
-printf 'rebasing %s onto %s (pre-sync %s)\n' "$BRANCH" "$TO" "${pre_sha:0:12}"
-if ! "${git_in_repo[@]}" rebase "$TO"; then
-    "${git_in_repo[@]}" rebase --abort >/dev/null 2>&1 || true
-    "${git_in_repo[@]}" reset --hard "$pre_sha" >/dev/null
-    printf 'FAIL: rebase onto %s hit a conflict; aborted. %s stays pinned at the last-good SHA %s. Resolve manually, then re-run.\n' \
-        "$TO" "$BRANCH" "${pre_sha:0:12}" >&2
-    exit 1
+# Detect a no-op BEFORE rebasing: `git rebase` exits 0 and prints its own
+# "up to date" chatter when there is nothing to replay, which would otherwise
+# be indistinguishable from a real rebase in the summary line below.
+to_sha="$("${git_in_repo[@]}" rev-parse "$TO")"
+rebased=1
+if "${git_in_repo[@]}" merge-base --is-ancestor "$to_sha" "$BRANCH"; then
+    rebased=0
+    printf '%s is already an ancestor of %s; nothing to rebase (pre-sync %s)\n' \
+        "$TO" "$BRANCH" "$pre_short"
+else
+    printf 'rebasing %s onto %s (pre-sync %s)\n' "$BRANCH" "$TO" "$pre_short"
+    if ! "${git_in_repo[@]}" rebase "$TO"; then
+        "${git_in_repo[@]}" rebase --abort >/dev/null 2>&1 || true
+        "${git_in_repo[@]}" reset --hard "$pre_sha" >/dev/null
+        printf 'FAIL: rebase onto %s hit a conflict; aborted. %s stays pinned at the last-good SHA %s. Resolve manually, then re-run.\n' \
+            "$TO" "$BRANCH" "$pre_short" >&2
+        exit 1
+    fi
 fi
 
 new_sha="$("${git_in_repo[@]}" rev-parse "$BRANCH")"
+new_short="${new_sha:0:12}"
 
 printf 'build gate: %s\n' "$BUILD_CMD"
 if ! (cd "$REPO" && bash -c "$BUILD_CMD"); then
     "${git_in_repo[@]}" reset --hard "$pre_sha" >/dev/null
-    printf 'FAIL: build gate failed after the rebase; %s restored to its pre-sync state %s.\n' \
-        "$BRANCH" "${pre_sha:0:12}" >&2
+    rebase_clause=""
+    if [ "$rebased" -eq 1 ]; then
+        rebase_clause=" after the rebase"
+    fi
+    printf 'FAIL: build gate failed%s; %s restored to its pre-sync state %s.\n' \
+        "$rebase_clause" "$BRANCH" "$pre_short" >&2
     exit 1
 fi
 
 printf '%s\n' "$new_sha" >"$GIT_DIR_ABS/zeo-last-good"
-printf 'OK: %s rebased onto %s and gated green; last-good recorded as %s\n' \
-    "$BRANCH" "$TO" "${new_sha:0:12}"
+if [ "$rebased" -eq 1 ]; then
+    printf 'OK: %s rebased onto %s and gated green; last-good recorded as %s\n' \
+        "$BRANCH" "$TO" "$new_short"
+else
+    printf 'OK: %s already up to date with %s at %s (nothing to rebase)\n' \
+        "$BRANCH" "$TO" "$new_short"
+fi

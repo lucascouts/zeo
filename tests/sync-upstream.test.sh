@@ -83,10 +83,12 @@ make_fixtures() {
   FIX_PRE_SHA="$(git -C "$FIX_FORK" rev-parse zeo)"
 
   # Advance upstream after the clone (stale remote-tracking ref in the fork).
+  # Mode `noop` deliberately does NOT advance it: upstream/main stays at the
+  # commit zeo already sits on top of, so there is nothing to replay.
   if [ "$mode" = "conflict" ]; then
     printf 'upstream-line1\nline2\nline3\n' >"$FIX_UP/file.txt"
     git -C "$FIX_UP" commit -qam "upstream: change line1"
-  else
+  elif [ "$mode" = "clean" ]; then
     printf 'upstream work\n' >"$FIX_UP/upstream.txt"
     git -C "$FIX_UP" add upstream.txt
     git -C "$FIX_UP" commit -qm "upstream: advance"
@@ -163,6 +165,59 @@ assert_nonzero "s3: exits non-zero when the build gate fails" "$rc"
 assert_eq "s3: branch zeo restored to the pre-sync SHA" \
   "$FIX_PRE_SHA" "$(git -C "$FIX_FORK" rev-parse zeo)"
 check_no_residue "s3" "$FIX_FORK"
+
+# --- Scenario 4: nothing to rebase -> say so; never claim a rebase (7.1) ------
+# Regression guard for the defect found validating story 001: when `--to` is
+# already an ancestor of zeo, `git rebase` is a silent no-op that exits 0, so the
+# script ran its gate and reported "zeo rebased onto upstream/main and gated
+# green" while having replayed nothing. That is exactly what made task 6.2's
+# "first real sync" look green against a frozen upstream. A sync that did nothing
+# MUST be distinguishable from one that did something.
+make_fixtures s4 noop
+rc=0
+bash "$SCRIPT" --repo "$FIX_FORK" --to upstream/main --build-cmd true \
+  >"$TMP/s4.log" 2>&1 || rc=$?
+assert_zero "s4: exits 0 when there is nothing to rebase" "$rc"
+assert_eq "s4: branch zeo stays exactly where it was" \
+  "$FIX_PRE_SHA" "$(git -C "$FIX_FORK" rev-parse zeo)"
+# Assert on the script's OWN summary line, not on git's passthrough chatter:
+# `git rebase` already prints "Current branch zeo is up to date", so grepping the
+# whole log for that phrase would pass without the script having understood anything.
+if grep -i '^OK:' "$TMP/s4.log" | grep -qi 'up to date'; then
+  pass "s4: the script's own OK line reports that the branch is already up to date"
+else
+  fail "s4: the script's own OK line reports that the branch is already up to date (got: $(grep -i '^OK:' "$TMP/s4.log" | head -1))"
+fi
+if grep -qi 'rebased onto' "$TMP/s4.log"; then
+  fail "s4: does NOT claim a rebase that never happened (found 'rebased onto')"
+else
+  pass "s4: does NOT claim a rebase that never happened"
+fi
+if [ -f "$FIX_FORK/.git/zeo-last-good" ]; then
+  assert_eq "s4: last-good marker still records the (unchanged) tip" \
+    "$FIX_PRE_SHA" "$(cat "$FIX_FORK/.git/zeo-last-good")"
+else
+  fail "s4: last-good marker still records the (unchanged) tip (.git/zeo-last-good missing)"
+fi
+check_no_residue "s4" "$FIX_FORK"
+
+# --- Scenario 5: nothing to rebase AND the gate fails (R5.3 on the no-op path) -
+# The no-op path must still honour R5.3. Without this, "restores state on gate
+# failure" would be claimed for the up-to-date branch on code symmetry alone —
+# the same untested-error-path trap that R2.3 fell into in this very story.
+make_fixtures s5 noop
+rc=0
+bash "$SCRIPT" --repo "$FIX_FORK" --to upstream/main --build-cmd false \
+  >"$TMP/s5.log" 2>&1 || rc=$?
+assert_nonzero "s5: exits non-zero when the gate fails with nothing to rebase" "$rc"
+assert_eq "s5: branch zeo still at the pre-sync SHA" \
+  "$FIX_PRE_SHA" "$(git -C "$FIX_FORK" rev-parse zeo)"
+if [ -f "$FIX_FORK/.git/zeo-last-good" ]; then
+  fail "s5: no last-good marker written when the gate fails"
+else
+  pass "s5: no last-good marker written when the gate fails"
+fi
+check_no_residue "s5" "$FIX_FORK"
 
 # --- Summary -----------------------------------------------------------------
 printf '\n%d checks, %d failures\n' "$CHECKS" "$FAILURES"
