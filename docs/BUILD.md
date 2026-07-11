@@ -23,6 +23,13 @@ The fork's `.cargo/config.toml` already supplies the mandatory rustflags —
 **Do not set a bare `RUSTFLAGS` env var**: it overrides (rather than merges with) the
 config and would drop `tokio_unstable`, breaking the build.
 
+> **GOTCHA — run cargo from inside `fork/`.** Cargo discovers `.cargo/config.toml` from the
+> **current working directory**, not from `--manifest-path`. Invoking
+> `cargo build --manifest-path fork/Cargo.toml` from the workspace root silently **skips**
+> the fork's rustflags, producing a differently-fingerprinted build (and a full rebuild the
+> next time you build correctly). Always `cd fork` first — which is what
+> `scripts/sync-upstream.sh` does for its build gate.
+
 Zeo-specific build env:
 
 | Var | Required | Why |
