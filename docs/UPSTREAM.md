@@ -41,6 +41,32 @@ Two consequences, both permanent:
   Zed's CI fires on every push, fails for want of secrets, and burns minutes. Re-check
   this after any repository transfer or settings reset.
 
+## Dependabot: alerts are telemetry, updates are forbidden
+
+Dependency graph and **Dependabot alerts** are ON. **Dependabot security updates** are OFF,
+and they stay OFF.
+
+The distinction is the whole point. Zed's `Cargo.lock` carries ~1850 packages, **none of
+them ours** — Zeo adds one local path crate and not a single third-party dependency. So:
+
+- **An alert is information, not a task.** Every alert Zeo receives exists identically on
+  `zed-industries/zed`; it is Zed's dependency, on Zed's schedule. The correct response is
+  usually **none**: when upstream bumps, the fix arrives for free on the next rebase.
+- **Security updates would open PRs against `Cargo.lock`** — breaking the `--frozen`
+  build contract (design: no new dependencies) *and* planting a permanent conflict in a hot
+  file that every daily rebase has to fight. That is why the setting is disabled.
+
+> ⛔ **Never click "Create Dependabot security update"** on an alert, and never enable
+> Dependabot security updates. GitHub offers both prominently and they look like the
+> helpful thing to do. They are not: a dependency bump of our own is a fork of Zed's
+> dependency tree, which is precisely the maintenance cost D1 (shallow rebrand) exists to
+> avoid.
+
+**The escape hatch**, so it is a decision and not a temptation: a *critical* CVE, in a code
+path Zeo actually reaches, left unfixed upstream for long enough to matter. Then bump it
+locally — as a registered deviation, accepting that it conflicts on every rebase until
+upstream catches up. Rare by construction. Anything short of that bar: wait for the rebase.
+
 ## Remote topology (`fork/`)
 
 | Remote     | URL                                       | Fetch | Push         |
