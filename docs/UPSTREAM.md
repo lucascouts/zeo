@@ -64,8 +64,12 @@ Two consequences, both permanent:
 zeo = <pinned snapshot commit>
         └─ 7 patch commits (0001, 0002, 0005–0009)
              └─ rebrand commit block (channel / auto-update / paths / bin / desktop+icon)
-                  └─ 2 follow-ups (clippy-clean of the patch-0002 crate; startup-log rebrand)
+                  └─ 3 follow-ups (clippy-clean of the patch-0002 crate; startup-log
+                     rebrand; README)
 ```
+
+`README.md` is a hot upstream file, so it will conflict whenever Zed touches it — accepted,
+because the public repo page has to be Zeo's, not Zed's. `rerere` replays the resolution.
 
 Daily sync rebases the patch + rebrand stack onto the new `upstream/main` tip.
 
