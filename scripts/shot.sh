@@ -1,0 +1,533 @@
+#!/usr/bin/env bash
+#
+# Capture one Zeo surface, in both appearances, from a fixed fixture.
+#
+#   shot.sh --label <before|after> --surface <name>
+#           [--bin <path>] [--out-dir <path>] [--settle <secs>]
+#           [--keys <chord>]... [--crop <WxH+X+Y>] [--output <name>]
+#           [--theme-light <name>] [--theme-dark <name>]
+#
+# Every invocation runs TWO passes — one per appearance. Each pass launches the
+# binary against a THROWAWAY profile (an XDG_CONFIG_HOME + XDG_DATA_HOME under a
+# temp dir; never the user's ~/.config), whose settings.json pins the appearance
+# for that pass, opens a fixed fixture file at a fixed window size, optionally
+# drives the surface open with synthetic keystrokes, captures the full output
+# with `grim`, and crops it with `magick` against FIXED coordinates (R5.1).
+#
+# `slurp` is absent on this host and is NEVER invoked (R5.2): an interactive
+# region would make before/after pairs non-comparable. The crop is fixed, which
+# is exactly why the fixture — window size, open file, clean profile — is pinned
+# HERE, in the script, rather than chosen at run time.
+#
+# Output is transactional: both crops are staged in the temp dir and published
+# only once BOTH passes have succeeded. Any failure exits non-zero naming the
+# step that failed, leaves no window behind, and emits no PNG at all — never a
+# zero-byte file, and never a plausible-looking capture of the wrong state.
+
+set -euo pipefail
+
+readonly DEFAULT_THEME_LIGHT="One Light"
+readonly DEFAULT_THEME_DARK="One Dark"
+
+LABEL=""
+SURFACE=""
+BIN="target/release/zeo"
+OUT_DIR=".epic/stories/002-visual-identity/shots"
+SETTLE="3"
+CROP="1600x900+160+90"
+OUTPUT=""
+THEME_LIGHT="$DEFAULT_THEME_LIGHT"
+THEME_DARK="$DEFAULT_THEME_DARK"
+KEYS=()
+
+# The fixture. Pinned here so that a fixed crop means the same thing on every
+# run: same window geometry, same file, same clean profile.
+#
+# The fork honours a window-bounds override only when position AND size are both
+# set (workspace.rs: ZED_WINDOW_POSITION.zip(ZED_WINDOW_SIZE)); both are "X,Y".
+readonly WINDOW_SIZE="1600,900"
+readonly WINDOW_POSITION="160,90"
+# A deterministic directory name: it is the fixture's parent, so it is what the
+# title bar shows. A raw `mktemp -d` basename would differ between runs and put
+# random text inside the crop.
+readonly FIXTURE_DIR_NAME="zeo-fixture"
+readonly FIXTURE_FILE_NAME="main.rs"
+# $XDG_CONFIG_HOME/<subdir>/settings.json — paths.rs: APP_NAME_LOWERCASE.
+readonly APP_CONFIG_SUBDIR="zeo"
+
+# A launch that dies instantly is a failed launch even when --settle is 0, so
+# always give the process at least this long to fail before trusting it.
+readonly LAUNCH_GRACE="0.5"
+# Time for the UI to react to each driver chord before the next one (or grim).
+readonly KEY_DELAY="0.4"
+
+WORK=""
+APP_PID=""
+KEY_EVENTS=()
+
+usage() {
+    cat <<'EOF'
+Usage: shot.sh --label <before|after> --surface <name> [options]
+
+  --label        before | after                    (required)
+  --surface      surface name, used in the filename (required)
+  --bin          binary to capture                 (default: target/release/zeo)
+  --out-dir      root of the shot tree             (default: .epic/stories/002-visual-identity/shots)
+  --settle       seconds to wait for the window    (default: 3)
+  --keys         driver chord, repeatable          (e.g. --keys ctrl+shift+p)
+  --crop         FIXED crop, WxH+X+Y               (default: 1600x900+160+90)
+  --output       grim output name to capture       (default: every output)
+  --theme-light  theme pinned in the light pass    (default: One Light)
+  --theme-dark   theme pinned in the dark pass     (default: One Dark)
+
+Emits <out-dir>/<label>/<surface>-light.png and <surface>-dark.png.
+
+Driving a surface (--keys):
+  `editor` is the editor at rest: it needs no synthetic input and works with no
+  daemon and no sudo. Every other surface has to be opened with keystrokes,
+  which are sent with ydotool and therefore need `ydotoold` running:
+
+      sudo ydotoold &            # then, e.g.
+      shot.sh --label before --surface command-palette --keys ctrl+shift+p
+
+  Suggested chords: command-palette ctrl+shift+p | file-picker ctrl+p |
+  project-search ctrl+shift+f | outline ctrl+shift+o | theme-selector ctrl+k ctrl+t
+  (a sequence is several --keys: --keys ctrl+k --keys ctrl+t).
+
+  Chord syntax: `+`-joined names — ctrl, shift, alt, super, a-z, 0-9, escape,
+  enter, tab, space, backspace, delete, up, down, left, right, home, end,
+  comma, period, slash, semicolon, minus, equal, f1-f12.
+
+  Without --keys, a non-`editor` surface is captured AT REST — the PNG shows the
+  editor, not the surface. The script says so loudly; it cannot know better.
+
+Themes: the appearance (light/dark) is what the two passes vary, but the theme
+NAMES have to be pinned too (the fork's ThemeSelection requires both). They
+default to the stock ones, which is what the `before` pass wants; give the
+`after` pass Zeo's own theme names with --theme-light/--theme-dark.
+
+Exit status: 0 when both PNGs are written; non-zero (naming the failed step,
+with no PNG written at all) otherwise.
+EOF
+}
+
+die() {
+    printf 'FAIL: %s\n' "$1" >&2
+    exit 1
+}
+
+warn() {
+    printf 'WARN: %s\n' "$1" >&2
+}
+
+# No stray window, whatever happens (a leftover window would also corrupt the
+# next pass: two Zeo windows on the same output).
+stop_app() {
+    local i
+
+    [ -n "$APP_PID" ] || return 0
+
+    if kill -0 "$APP_PID" 2>/dev/null; then
+        kill "$APP_PID" 2>/dev/null || true
+        for ((i = 0; i < 20; i++)); do
+            kill -0 "$APP_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$APP_PID" 2>/dev/null; then
+            kill -9 "$APP_PID" 2>/dev/null || true
+        fi
+    fi
+
+    wait "$APP_PID" 2>/dev/null || true
+    APP_PID=""
+}
+
+cleanup() {
+    stop_app
+    if [ -n "$WORK" ] && [ -d "$WORK" ]; then
+        rm -rf "$WORK"
+    fi
+}
+trap cleanup EXIT
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --label)       LABEL="${2:?--label needs before|after}";                     shift 2 ;;
+        --surface)     SURFACE="${2:?--surface needs a name}";                       shift 2 ;;
+        --bin)         BIN="${2:?--bin needs a path}";                               shift 2 ;;
+        --out-dir)     OUT_DIR="${2:?--out-dir needs a path}";                       shift 2 ;;
+        --settle)      SETTLE="${2:?--settle needs seconds}";                        shift 2 ;;
+        --keys)        KEYS+=("${2:?--keys needs a chord, e.g. ctrl+shift+p}");      shift 2 ;;
+        --crop)        CROP="${2:?--crop needs WxH+X+Y}";                            shift 2 ;;
+        --output)      OUTPUT="${2:?--output needs an output name}";                 shift 2 ;;
+        --theme-light) THEME_LIGHT="${2:?--theme-light needs a theme name}";         shift 2 ;;
+        --theme-dark)  THEME_DARK="${2:?--theme-dark needs a theme name}";           shift 2 ;;
+        -h|--help)     usage; exit 0 ;;
+        *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+# --- Arguments: reject before anything is created, so a bad call writes nothing.
+
+case "$LABEL" in
+    before|after) ;;
+    "") die "--label is required: before or after" ;;
+    *)  die "--label must be 'before' or 'after' (got '$LABEL')" ;;
+esac
+
+if [ -z "$SURFACE" ]; then
+    die "--surface is required (e.g. editor, command-palette)"
+fi
+if ! [[ "$SURFACE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    die "--surface must be a plain name (letters, digits, . _ -), got '$SURFACE'"
+fi
+if ! [[ "$SETTLE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    die "--settle must be a non-negative number of seconds (got '$SETTLE')"
+fi
+# R5.2: the crop is FIXED coordinates, never an interactive region.
+if ! [[ "$CROP" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]]; then
+    die "--crop must be fixed coordinates, WxH+X+Y (got '$CROP')"
+fi
+if [[ "$THEME_LIGHT$THEME_DARK" == *[\"\\]* ]]; then
+    die "theme names must not contain quotes or backslashes"
+fi
+
+# --- Surfaces: which need a driver, and what to drive them with.
+
+# Prints the chord(s) that open a surface, or nothing when there is no known one.
+suggested_keys() {
+    case "$1" in
+        command-palette) printf '%s' 'ctrl+shift+p' ;;
+        file-picker)     printf '%s' 'ctrl+p' ;;
+        project-search)  printf '%s' 'ctrl+shift+f' ;;
+        outline)         printf '%s' 'ctrl+shift+o' ;;
+        theme-selector)  printf '%s' 'ctrl+k ctrl+t' ;;
+        *)               printf '' ;;
+    esac
+}
+
+# Surfaces that ARE the fixture at rest: no synthetic input, no daemon, no sudo.
+is_at_rest_surface() {
+    case "$1" in
+        editor|editor-*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The theme pinned for one appearance.
+theme_for() {
+    case "$1" in
+        dark) printf '%s' "$THEME_DARK" ;;
+        *)    printf '%s' "$THEME_LIGHT" ;;
+    esac
+}
+
+# --- Tools: fail before launching anything, so a missing tool leaves no window.
+
+for tool in grim magick; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        die "$tool is not installed: cannot capture. No PNG written."
+    fi
+done
+
+if [ "${#KEYS[@]}" -gt 0 ]; then
+    # Probe ydotool for real; never assume. A driver that cannot fire would
+    # capture the undriven editor under the driven surface's name, silently
+    # corrupting the before/after pair — so this is fatal, not a warning.
+    ydotool_socket="${YDOTOOL_SOCKET:-/run/user/$(id -u)/.ydotool_socket}"
+    if ! command -v ydotool >/dev/null 2>&1; then
+        die "surface '$SURFACE' needs synthetic input (--keys ${KEYS[*]}), but ydotool is not installed. No PNG written."
+    fi
+    if [ ! -S "$ydotool_socket" ]; then
+        die "surface '$SURFACE' needs synthetic input (--keys ${KEYS[*]}), but ydotoold is not reachable (no socket at $ydotool_socket) — start it with 'sudo ydotoold'. No PNG written."
+    fi
+elif ! is_at_rest_surface "$SURFACE"; then
+    hint="$(suggested_keys "$SURFACE")"
+    if [ -n "$hint" ]; then
+        hint="--keys $hint"
+    else
+        hint="--keys <chord> (no chord is known for this surface)"
+    fi
+    warn "surface '$SURFACE' is being captured AT REST: with no --keys, the PNG shows the editor, not '$SURFACE'. Drive it with $hint (needs 'sudo ydotoold')."
+fi
+
+if [ "$LABEL" = "after" ] &&
+    [ "$THEME_LIGHT" = "$DEFAULT_THEME_LIGHT" ] &&
+    [ "$THEME_DARK" = "$DEFAULT_THEME_DARK" ]; then
+    warn "--label after is pinning the stock themes ($THEME_LIGHT / $THEME_DARK): this capture will NOT show Zeo's own theme. Pass --theme-light/--theme-dark."
+fi
+
+if [ ! -x "$BIN" ]; then
+    die "launch: no executable binary at '$BIN' (--bin). No PNG written."
+fi
+
+# --- Driver: a chord becomes evdev press/release events for `ydotool key`.
+
+# Prints the evdev keycode for a key name; returns 1 when the name is unknown.
+keycode_for() {
+    case "$1" in
+        ctrl|control)   printf '29' ;;
+        shift)          printf '42' ;;
+        alt)            printf '56' ;;
+        super|meta|win) printf '125' ;;
+        a) printf '30'  ;; b) printf '48'  ;; c) printf '46'  ;; d) printf '32' ;;
+        e) printf '18'  ;; f) printf '33'  ;; g) printf '34'  ;; h) printf '35' ;;
+        i) printf '23'  ;; j) printf '36'  ;; k) printf '37'  ;; l) printf '38' ;;
+        m) printf '50'  ;; n) printf '49'  ;; o) printf '24'  ;; p) printf '25' ;;
+        q) printf '16'  ;; r) printf '19'  ;; s) printf '31'  ;; t) printf '20' ;;
+        u) printf '22'  ;; v) printf '47'  ;; w) printf '17'  ;; x) printf '45' ;;
+        y) printf '21'  ;; z) printf '44'  ;;
+        1) printf '2'   ;; 2) printf '3'   ;; 3) printf '4'   ;; 4) printf '5'  ;;
+        5) printf '6'   ;; 6) printf '7'   ;; 7) printf '8'   ;; 8) printf '9'  ;;
+        9) printf '10'  ;; 0) printf '11'  ;;
+        escape|esc)     printf '1' ;;
+        enter|return)   printf '28' ;;
+        tab)            printf '15' ;;
+        space)          printf '57' ;;
+        backspace)      printf '14' ;;
+        delete)         printf '111' ;;
+        up)             printf '103' ;;
+        down)           printf '108' ;;
+        left)           printf '105' ;;
+        right)          printf '106' ;;
+        home)           printf '102' ;;
+        end)            printf '107' ;;
+        comma)          printf '51' ;;
+        period)         printf '52' ;;
+        slash)          printf '53' ;;
+        semicolon)      printf '39' ;;
+        minus)          printf '12' ;;
+        equal)          printf '13' ;;
+        f1)  printf '59' ;; f2)  printf '60' ;; f3)  printf '61' ;; f4)  printf '62' ;;
+        f5)  printf '63' ;; f6)  printf '64' ;; f7)  printf '65' ;; f8)  printf '66' ;;
+        f9)  printf '67' ;; f10) printf '68' ;; f11) printf '87' ;; f12) printf '88' ;;
+        *) return 1 ;;
+    esac
+}
+
+# Fills KEY_EVENTS with the press-then-release-in-reverse events for one chord.
+chord_events() {
+    local chord="$1"
+    local -a parts=()
+    local -a codes=()
+    local part code i
+
+    IFS='+' read -r -a parts <<<"$chord"
+    for part in "${parts[@]}"; do
+        part="${part,,}"
+        if [ -z "$part" ]; then
+            die "driver: malformed chord '$chord' in --keys"
+        fi
+        if ! code="$(keycode_for "$part")"; then
+            die "driver: unknown key '$part' in chord '$chord' (see --help for the key names)"
+        fi
+        codes+=("$code")
+    done
+
+    KEY_EVENTS=()
+    for code in "${codes[@]}"; do
+        KEY_EVENTS+=("$code:1")
+    done
+    for ((i = ${#codes[@]} - 1; i >= 0; i--)); do
+        KEY_EVENTS+=("${codes[i]}:0")
+    done
+}
+
+drive_surface() {
+    local chord
+
+    [ "${#KEYS[@]}" -gt 0 ] || return 0
+
+    for chord in "${KEYS[@]}"; do
+        chord_events "$chord"
+        printf 'driving %s: %s (%s)\n' "$SURFACE" "$chord" "${KEY_EVENTS[*]}"
+        if ! ydotool key "${KEY_EVENTS[@]}"; then
+            die "driver: ydotool could not send '$chord' for surface '$SURFACE'. No PNG written."
+        fi
+        sleep "$KEY_DELAY"
+    done
+}
+
+# --- The fixture, the profile, and one pass.
+
+write_fixture() {
+    cat <<'EOF'
+// The Zeo screenshot fixture. Pinned: every before/after pair is this file, in
+// this window, so that a fixed crop compares like with like (R5.1).
+use std::collections::HashMap;
+
+/// A crystal facet: an edge of the shard, and the light it throws.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Facet {
+    pub name: String,
+    pub radius: f32,
+    pub visible: bool,
+}
+
+impl Facet {
+    pub fn new(name: &str, radius: f32) -> Self {
+        Self {
+            name: name.to_string(),
+            radius,
+            visible: true,
+        }
+    }
+
+    pub fn refract(&self, angle: f32) -> Option<f32> {
+        if !self.visible || self.radius <= 0.0 {
+            return None;
+        }
+        Some((angle * self.radius).clamp(0.0, 360.0))
+    }
+}
+
+fn main() {
+    let mut shard: HashMap<&str, Facet> = HashMap::new();
+    shard.insert("edge", Facet::new("edge", 12.5));
+
+    for (key, facet) in &shard {
+        match facet.refract(45.0) {
+            Some(angle) => println!("{key}: {angle:.2}°"),
+            None => eprintln!("{key}: opaque"),
+        }
+    }
+}
+EOF
+}
+
+# The throwaway profile for one pass: it pins the appearance, and it exists so
+# that the user's real ~/.config is never read and never touched.
+write_settings() {
+    local mode="$1"
+
+    cat <<EOF
+{
+  "theme": {
+    "mode": "$mode",
+    "light": "$THEME_LIGHT",
+    "dark": "$THEME_DARK"
+  },
+  "restore_on_startup": "none",
+  "auto_update": false,
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false
+  }
+}
+EOF
+}
+
+# How many 100ms polls one pass waits: --settle, but never less than the grace
+# that makes an instantly-dying launch detectable rather than a race.
+settle_steps() {
+    awk -v settle="$SETTLE" -v grace="$LAUNCH_GRACE" 'BEGIN {
+        seconds = (settle > grace ? settle : grace)
+        steps = int(seconds * 10 + 0.5)
+        print (steps < 1 ? 1 : steps)
+    }'
+}
+
+# Waits for the window to settle, and turns a process that died on us into a
+# named failure. Returns with APP_PID cleared if the process is already gone.
+await_window() {
+    local mode="$1"
+    local steps i status
+
+    steps="$(settle_steps)"
+
+    for ((i = 0; i < steps; i++)); do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            status=0
+            wait "$APP_PID" || status=$?
+            APP_PID=""
+            if [ "$status" -ne 0 ]; then
+                die "launch: $BIN exited with status $status during the $mode pass — no window to capture. No PNG written."
+            fi
+            warn "launch: $BIN exited cleanly during the $mode pass; capturing the output as it stands."
+            return 0
+        fi
+        sleep 0.1
+    done
+}
+
+# R5.2: the whole output. `slurp` is absent on this host and is NEVER invoked —
+# an interactive region would not be reproducible.
+capture_full_output() {
+    local raw="$1"
+    local -a grim_cmd=(grim)
+
+    if [ -n "$OUTPUT" ]; then
+        grim_cmd+=(-o "$OUTPUT")
+    fi
+    grim_cmd+=("$raw")
+
+    if ! "${grim_cmd[@]}"; then
+        die "grim: capture failed (grim exited non-zero). No PNG written."
+    fi
+    if [ ! -s "$raw" ]; then
+        die "grim: capture produced no bytes. No PNG written."
+    fi
+}
+
+# R5.2: FIXED coordinates — the same box out of every capture, which is what
+# makes a before/after pair diffable.
+crop_fixed() {
+    local raw="$1" staged="$2"
+
+    if ! magick "$raw" -crop "$CROP" +repage "$staged"; then
+        die "magick: crop $CROP failed. No PNG written."
+    fi
+    if [ ! -s "$staged" ]; then
+        die "magick: crop $CROP produced no bytes. No PNG written."
+    fi
+}
+
+run_pass() {
+    local mode="$1"
+    local config="$WORK/config-$mode"
+    local data="$WORK/data-$mode"
+    local raw="$WORK/raw-$mode.png"
+    local staged="$WORK/stage/$SURFACE-$mode.png"
+    local theme
+
+    theme="$(theme_for "$mode")"
+
+    mkdir -p "$config/$APP_CONFIG_SUBDIR" "$data"
+    write_settings "$mode" >"$config/$APP_CONFIG_SUBDIR/settings.json"
+
+    printf 'pass %s: %s (settle %ss, window %s, theme %s)\n' \
+        "$mode" "$BIN" "$SETTLE" "$WINDOW_SIZE" "$theme"
+
+    XDG_CONFIG_HOME="$config" \
+    XDG_DATA_HOME="$data" \
+    ZED_WINDOW_SIZE="$WINDOW_SIZE" \
+    ZED_WINDOW_POSITION="$WINDOW_POSITION" \
+        "$BIN" "$FIXTURE_FILE" >>"$WORK/app-$mode.log" 2>&1 &
+    APP_PID="$!"
+
+    await_window "$mode"
+    drive_surface
+    capture_full_output "$raw"
+    crop_fixed "$raw" "$staged"
+    stop_app
+}
+
+# --- Run both passes, then publish.
+
+WORK="$(mktemp -d)"
+FIXTURE_FILE="$WORK/$FIXTURE_DIR_NAME/$FIXTURE_FILE_NAME"
+mkdir -p "$WORK/$FIXTURE_DIR_NAME" "$WORK/stage"
+write_fixture >"$FIXTURE_FILE"
+
+for appearance in light dark; do
+    run_pass "$appearance"
+done
+
+# Publish only now: a pair is either whole or absent, never half-written.
+mkdir -p "$OUT_DIR/$LABEL"
+for appearance in light dark; do
+    mv -f "$WORK/stage/$SURFACE-$appearance.png" "$OUT_DIR/$LABEL/$SURFACE-$appearance.png"
+done
+
+printf 'OK: %s/%s/%s-{light,dark}.png (crop %s, window %s)\n' \
+    "$OUT_DIR" "$LABEL" "$SURFACE" "$CROP" "$WINDOW_SIZE"
