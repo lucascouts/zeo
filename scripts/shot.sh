@@ -4,44 +4,72 @@
 #
 #   shot.sh --label <before|after> --surface <name>
 #           [--bin <path>] [--out-dir <path>] [--settle <secs>]
-#           [--keys <chord>]... [--crop <WxH+X+Y>] [--output <name>]
-#           [--theme-light <name>] [--theme-dark <name>]
+#           [--keys <chord>]... [--theme-light <name>] [--theme-dark <name>]
 #
 # Every invocation runs TWO passes — one per appearance. Each pass launches the
 # binary against a THROWAWAY profile (an XDG_CONFIG_HOME + XDG_DATA_HOME under a
 # temp dir; never the user's ~/.config), whose settings.json pins the appearance
-# for that pass, opens a fixed fixture file at a fixed window size, optionally
-# drives the surface open with synthetic keystrokes, captures the full output
-# with `grim`, and crops it with `magick` against FIXED coordinates (R5.1).
+# AND the theme names for that pass, opens a fixed fixture file at a fixed window
+# size, optionally drives the surface open with synthetic keystrokes, and captures
+# THE ACTIVE WINDOW with `spectacle`.
 #
-# `slurp` is absent on this host and is NEVER invoked (R5.2): an interactive
-# region would make before/after pairs non-comparable. The crop is fixed, which
-# is exactly why the fixture — window size, open file, clean profile — is pinned
-# HERE, in the script, rather than chosen at run time.
+# CAPTURE BACKEND: `spectacle`, NOT `grim`. KWin does not implement the
+# `wlr-screencopy` protocol that grim requires — `grim -g '0,0 1x1' out.png` prints
+# "compositor doesn't support the screen capture protocol", exits 1 and writes no
+# file. Every capture on this host must go through KWin's own screenshot service,
+# which is what spectacle speaks. design.md §9 already named it as the fallback.
 #
-# Output is transactional: both crops are staged in the temp dir and published
-# only once BOTH passes have succeeded. Any failure exits non-zero naming the
-# step that failed, leaves no window behind, and emits no PNG at all — never a
-# zero-byte file, and never a plausible-looking capture of the wrong state.
+# The swap DELETES the fixed-coordinate crop, and that is a strengthening, not a
+# concession. `spectacle -a` captures the active WINDOW, so the capture is already
+# window-scoped: it cannot drift with the screen resolution or the panel layout,
+# which a fixed full-screen crop box does. It is also why `slurp`'s absence (R5.2)
+# stopped mattering — there was never an interactive region to select, and now
+# there is not even a region to crop.
+#
+# `magick` survives as a VERIFIER, not a cropper: it proves each capture decodes as
+# a real image, and that both passes captured the SAME geometry (R5.1). That pair
+# check is the one mechanical defence against the failure mode `-a` introduces —
+# spectacle capturing whatever window happened to be active instead of Zeo.
+#
+# Output is transactional: both captures are staged in the temp dir and published
+# to <out-dir>/<label>/ only once BOTH passes have succeeded. Any failure exits
+# non-zero naming the step that failed, leaves no window behind, and emits no PNG
+# at all — never a zero-byte file, and never a plausible-looking capture of the
+# wrong state.
 
 set -euo pipefail
+
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="."
+fi
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly REPO_ROOT
 
 readonly DEFAULT_THEME_LIGHT="One Light"
 readonly DEFAULT_THEME_DARK="One Dark"
 
+# The shots live under docs/, NOT under .epic/. `.epic` is the FIRST line of the
+# workspace .gitignore, so anything written there can never be committed: the
+# evidence commits that pointed at it were silent no-ops. Evidence has to be
+# versioned to be evidence.
+DEFAULT_OUT_DIR="$REPO_ROOT/docs/visual/shots"
+readonly DEFAULT_OUT_DIR
+# docs/BUILD.md: the release build lands in the FORK's target dir, not a workspace one.
+DEFAULT_BIN="$REPO_ROOT/fork/target/release/zeo"
+readonly DEFAULT_BIN
+
 LABEL=""
 SURFACE=""
-BIN="target/release/zeo"
-OUT_DIR=".epic/stories/002-visual-identity/shots"
+BIN="$DEFAULT_BIN"
+OUT_DIR="$DEFAULT_OUT_DIR"
 SETTLE="3"
-CROP="1600x900+160+90"
-OUTPUT=""
 THEME_LIGHT="$DEFAULT_THEME_LIGHT"
 THEME_DARK="$DEFAULT_THEME_DARK"
 KEYS=()
 
-# The fixture. Pinned here so that a fixed crop means the same thing on every
-# run: same window geometry, same file, same clean profile.
+# The fixture. Pinned here — not chosen at run time — so that every before/after
+# pair is the same window, showing the same file, from the same clean profile.
 #
 # The fork honours a window-bounds override only when position AND size are both
 # set (workspace.rs: ZED_WINDOW_POSITION.zip(ZED_WINDOW_SIZE)); both are "X,Y".
@@ -49,7 +77,7 @@ readonly WINDOW_SIZE="1600,900"
 readonly WINDOW_POSITION="160,90"
 # A deterministic directory name: it is the fixture's parent, so it is what the
 # title bar shows. A raw `mktemp -d` basename would differ between runs and put
-# random text inside the crop.
+# random text inside the captured window.
 readonly FIXTURE_DIR_NAME="zeo-fixture"
 readonly FIXTURE_FILE_NAME="main.rs"
 # $XDG_CONFIG_HOME/<subdir>/settings.json — paths.rs: APP_NAME_LOWERCASE.
@@ -58,34 +86,44 @@ readonly APP_CONFIG_SUBDIR="zeo"
 # A launch that dies instantly is a failed launch even when --settle is 0, so
 # always give the process at least this long to fail before trusting it.
 readonly LAUNCH_GRACE="0.5"
-# Time for the UI to react to each driver chord before the next one (or grim).
+# Time for the UI to react to each driver chord before the next one (or the capture).
 readonly KEY_DELAY="0.4"
 
 WORK=""
 APP_PID=""
 KEY_EVENTS=()
+CAPTURE_GEOMETRY=""
+PASS_GEOMETRY=()
 
 usage() {
-    cat <<'EOF'
+    cat <<EOF
 Usage: shot.sh --label <before|after> --surface <name> [options]
 
   --label        before | after                    (required)
   --surface      surface name, used in the filename (required)
-  --bin          binary to capture                 (default: target/release/zeo)
-  --out-dir      root of the shot tree             (default: .epic/stories/002-visual-identity/shots)
+  --bin          binary to capture                 (default: $DEFAULT_BIN)
+  --out-dir      root of the shot tree             (default: $DEFAULT_OUT_DIR)
   --settle       seconds to wait for the window    (default: 3)
   --keys         driver chord, repeatable          (e.g. --keys ctrl+shift+p)
-  --crop         FIXED crop, WxH+X+Y               (default: 1600x900+160+90)
-  --output       grim output name to capture       (default: every output)
-  --theme-light  theme pinned in the light pass    (default: One Light)
-  --theme-dark   theme pinned in the dark pass     (default: One Dark)
+  --theme-light  theme pinned in the light pass    (default: $DEFAULT_THEME_LIGHT)
+  --theme-dark   theme pinned in the dark pass     (default: $DEFAULT_THEME_DARK)
 
 Emits <out-dir>/<label>/<surface>-light.png and <surface>-dark.png.
 
+Capture: \`spectacle -a -b -n -o <file>\` — the ACTIVE WINDOW, in the background,
+without a notification. There is no crop: the capture is window-scoped already.
+\`grim\` is never used (KWin has no wlr-screencopy — grim cannot capture here), and
+\`slurp\` is never used (an interactive region would make the pairs non-comparable).
+
+  GOTCHA: because the capture is of the ACTIVE window, the Zeo window must still be
+  the active one when it fires. Do not click away, and do not let a notification or
+  a prompt steal focus, during a run. A capture of the wrong window is caught only
+  if it is a different SIZE (see below) — otherwise it looks plausible.
+
 Driving a surface (--keys):
-  `editor` is the editor at rest: it needs no synthetic input and works with no
-  daemon and no sudo. Every other surface has to be opened with keystrokes,
-  which are sent with ydotool and therefore need `ydotoold` running:
+  \`editor\` is the editor at rest: it needs no synthetic input and works with no
+  daemon and no sudo. Every other surface has to be opened with keystrokes, which
+  are sent with ydotool and therefore need \`ydotoold\` running:
 
       sudo ydotoold &            # then, e.g.
       shot.sh --label before --surface command-palette --keys ctrl+shift+p
@@ -94,20 +132,20 @@ Driving a surface (--keys):
   project-search ctrl+shift+f | outline ctrl+shift+o | theme-selector ctrl+k ctrl+t
   (a sequence is several --keys: --keys ctrl+k --keys ctrl+t).
 
-  Chord syntax: `+`-joined names — ctrl, shift, alt, super, a-z, 0-9, escape,
-  enter, tab, space, backspace, delete, up, down, left, right, home, end,
-  comma, period, slash, semicolon, minus, equal, f1-f12.
+  Chord syntax: \`+\`-joined names — ctrl, shift, alt, super, a-z, 0-9, escape,
+  enter, tab, space, backspace, delete, up, down, left, right, home, end, comma,
+  period, slash, semicolon, minus, equal, f1-f12.
 
-  Without --keys, a non-`editor` surface is captured AT REST — the PNG shows the
+  Without --keys, a non-\`editor\` surface is captured AT REST — the PNG shows the
   editor, not the surface. The script says so loudly; it cannot know better.
 
 Themes: the appearance (light/dark) is what the two passes vary, but the theme
-NAMES have to be pinned too (the fork's ThemeSelection requires both). They
-default to the stock ones, which is what the `before` pass wants; give the
-`after` pass Zeo's own theme names with --theme-light/--theme-dark.
+NAMES have to be pinned too (the fork's ThemeSelection requires both). They default
+to the stock ones, which is what the \`before\` pass wants; give the \`after\` pass
+Zeo's own theme names with --theme-light/--theme-dark.
 
-Exit status: 0 when both PNGs are written; non-zero (naming the failed step,
-with no PNG written at all) otherwise.
+Exit status: 0 when both PNGs are written; non-zero (naming the failed step, with
+no PNG written at all) otherwise.
 EOF
 }
 
@@ -120,8 +158,8 @@ warn() {
     printf 'WARN: %s\n' "$1" >&2
 }
 
-# No stray window, whatever happens (a leftover window would also corrupt the
-# next pass: two Zeo windows on the same output).
+# No stray window, whatever happens (a leftover window would also corrupt the next
+# pass: two Zeo windows, and `spectacle -a` would capture whichever is active).
 stop_app() {
     local i
 
@@ -152,16 +190,14 @@ trap cleanup EXIT
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --label)       LABEL="${2:?--label needs before|after}";                     shift 2 ;;
-        --surface)     SURFACE="${2:?--surface needs a name}";                       shift 2 ;;
-        --bin)         BIN="${2:?--bin needs a path}";                               shift 2 ;;
-        --out-dir)     OUT_DIR="${2:?--out-dir needs a path}";                       shift 2 ;;
-        --settle)      SETTLE="${2:?--settle needs seconds}";                        shift 2 ;;
-        --keys)        KEYS+=("${2:?--keys needs a chord, e.g. ctrl+shift+p}");      shift 2 ;;
-        --crop)        CROP="${2:?--crop needs WxH+X+Y}";                            shift 2 ;;
-        --output)      OUTPUT="${2:?--output needs an output name}";                 shift 2 ;;
-        --theme-light) THEME_LIGHT="${2:?--theme-light needs a theme name}";         shift 2 ;;
-        --theme-dark)  THEME_DARK="${2:?--theme-dark needs a theme name}";           shift 2 ;;
+        --label)       LABEL="${2:?--label needs before|after}";                shift 2 ;;
+        --surface)     SURFACE="${2:?--surface needs a name}";                  shift 2 ;;
+        --bin)         BIN="${2:?--bin needs a path}";                          shift 2 ;;
+        --out-dir)     OUT_DIR="${2:?--out-dir needs a path}";                  shift 2 ;;
+        --settle)      SETTLE="${2:?--settle needs seconds}";                   shift 2 ;;
+        --keys)        KEYS+=("${2:?--keys needs a chord, e.g. ctrl+shift+p}"); shift 2 ;;
+        --theme-light) THEME_LIGHT="${2:?--theme-light needs a theme name}";    shift 2 ;;
+        --theme-dark)  THEME_DARK="${2:?--theme-dark needs a theme name}";      shift 2 ;;
         -h|--help)     usage; exit 0 ;;
         *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -183,10 +219,6 @@ if ! [[ "$SURFACE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
 fi
 if ! [[ "$SETTLE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     die "--settle must be a non-negative number of seconds (got '$SETTLE')"
-fi
-# R5.2: the crop is FIXED coordinates, never an interactive region.
-if ! [[ "$CROP" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]]; then
-    die "--crop must be fixed coordinates, WxH+X+Y (got '$CROP')"
 fi
 if [[ "$THEME_LIGHT$THEME_DARK" == *[\"\\]* ]]; then
     die "theme names must not contain quotes or backslashes"
@@ -224,16 +256,20 @@ theme_for() {
 
 # --- Tools: fail before launching anything, so a missing tool leaves no window.
 
-for tool in grim magick; do
+# `spectacle` captures; `magick` verifies what it captured. `grim` is NOT here on
+# purpose — it is a dead backend on KWin, and reaching for it is the bug this
+# script was rewritten to remove.
+for tool in spectacle magick; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         die "$tool is not installed: cannot capture. No PNG written."
     fi
 done
 
 if [ "${#KEYS[@]}" -gt 0 ]; then
-    # Probe ydotool for real; never assume. A driver that cannot fire would
-    # capture the undriven editor under the driven surface's name, silently
-    # corrupting the before/after pair — so this is fatal, not a warning.
+    # Probe ydotool for real; never assume. A driver that cannot fire would capture
+    # the undriven editor under the driven surface's name, silently corrupting the
+    # before/after pair — so this is fatal, not a warning, and it is fatal BEFORE
+    # the binary is launched, so no window is ever put on screen.
     ydotool_socket="${YDOTOOL_SOCKET:-/run/user/$(id -u)/.ydotool_socket}"
     if ! command -v ydotool >/dev/null 2>&1; then
         die "surface '$SURFACE' needs synthetic input (--keys ${KEYS[*]}), but ydotool is not installed. No PNG written."
@@ -353,7 +389,7 @@ drive_surface() {
 write_fixture() {
     cat <<'EOF'
 // The Zeo screenshot fixture. Pinned: every before/after pair is this file, in
-// this window, so that a fixed crop compares like with like (R5.1).
+// this window, so that the two captures compare like with like (R5.1).
 use std::collections::HashMap;
 
 /// A crystal facet: an edge of the shard, and the light it throws.
@@ -395,8 +431,15 @@ fn main() {
 EOF
 }
 
-# The throwaway profile for one pass: it pins the appearance, and it exists so
-# that the user's real ~/.config is never read and never touched.
+# The throwaway profile for one pass: it pins the appearance, and it exists so that
+# the user's real ~/.config is never read and never touched.
+#
+# The theme NAMES are pinned alongside the mode, not merely the mode. ThemeSelection
+# (settings_content/src/theme.rs:274-287) is #[serde(untagged)] and its Dynamic
+# variant requires BOTH `light` and `dark`; only `mode` carries #[serde(default)].
+# A settings file containing just {"mode":"light"} fails to deserialise, which
+# rejects the WHOLE file — so the appearance would be SILENTLY not pinned, and
+# R5.1's "same fixture" guarantee would be void.
 write_settings() {
     local mode="$1"
 
@@ -417,8 +460,8 @@ write_settings() {
 EOF
 }
 
-# How many 100ms polls one pass waits: --settle, but never less than the grace
-# that makes an instantly-dying launch detectable rather than a race.
+# How many 100ms polls one pass waits: --settle, but never less than the grace that
+# makes an instantly-dying launch detectable rather than a race.
 settle_steps() {
     awk -v settle="$SETTLE" -v grace="$LAUNCH_GRACE" 'BEGIN {
         seconds = (settle > grace ? settle : grace)
@@ -427,8 +470,8 @@ settle_steps() {
     }'
 }
 
-# Waits for the window to settle, and turns a process that died on us into a
-# named failure. Returns with APP_PID cleared if the process is already gone.
+# Waits for the window to settle, and turns a process that died on us into a named
+# failure. Returns with APP_PID cleared if the process is already gone.
 await_window() {
     local mode="$1"
     local steps i status
@@ -450,43 +493,54 @@ await_window() {
     done
 }
 
-# R5.2: the whole output. `slurp` is absent on this host and is NEVER invoked —
-# an interactive region would not be reproducible.
-capture_full_output() {
-    local raw="$1"
-    local -a grim_cmd=(grim)
+# The capture. `spectacle -a` takes the ACTIVE WINDOW through KWin's own screenshot
+# service — window-scoped, so there is nothing to crop and nothing to select
+# interactively (R5.2: `slurp` is absent and is never invoked; `grim` cannot capture
+# on KWin at all and is never invoked either).
+capture_window() {
+    local out="$1" mode="$2"
+    #  -a = --activewindow   the window, not the screen
+    #  -b = --background     capture and exit; never show the Spectacle UI
+    #  -n = --nonotify       no desktop notification (it would land in the next shot)
+    #  -o = --output <file>  write here
+    local -a cmd=(spectacle -a -b -n -o "$out")
 
-    if [ -n "$OUTPUT" ]; then
-        grim_cmd+=(-o "$OUTPUT")
-    fi
-    grim_cmd+=("$raw")
+    rm -f "$out"
 
-    if ! "${grim_cmd[@]}"; then
-        die "grim: capture failed (grim exited non-zero). No PNG written."
+    if ! "${cmd[@]}" >>"$WORK/spectacle-$mode.log" 2>&1; then
+        die "spectacle: the $mode capture failed (spectacle exited non-zero). No PNG written."
     fi
-    if [ ! -s "$raw" ]; then
-        die "grim: capture produced no bytes. No PNG written."
+    # Never trust the tool's exit code alone: a capture backend that reports success
+    # and writes nothing is exactly how a zero-byte PNG gets published.
+    if [ ! -s "$out" ]; then
+        die "spectacle: the $mode capture produced no bytes. No PNG written."
     fi
 }
 
-# R5.2: FIXED coordinates — the same box out of every capture, which is what
-# makes a before/after pair diffable.
-crop_fixed() {
-    local raw="$1" staged="$2"
+# Sets CAPTURE_GEOMETRY to the WxH of a capture, and dies if the file is not a
+# decodable image. A non-empty file is NOT proof of a usable capture.
+#
+# NOTE: this must set a global rather than print, because `die` inside a $( ... )
+# would exit only the subshell and let the caller sail on with an empty geometry.
+measure_capture() {
+    local file="$1" mode="$2"
+    local geom=""
 
-    if ! magick "$raw" -crop "$CROP" +repage "$staged"; then
-        die "magick: crop $CROP failed. No PNG written."
+    if ! geom="$(magick identify -format '%wx%h' "$file" 2>/dev/null)"; then
+        die "magick: the $mode capture is not a decodable image ($file). No PNG written."
     fi
-    if [ ! -s "$staged" ]; then
-        die "magick: crop $CROP produced no bytes. No PNG written."
+    geom="${geom%%$'\n'*}"
+    if ! [[ "$geom" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+        die "magick: the $mode capture has a degenerate geometry ('$geom'). No PNG written."
     fi
+
+    CAPTURE_GEOMETRY="$geom"
 }
 
 run_pass() {
     local mode="$1"
     local config="$WORK/config-$mode"
     local data="$WORK/data-$mode"
-    local raw="$WORK/raw-$mode.png"
     local staged="$WORK/stage/$SURFACE-$mode.png"
     local theme
 
@@ -507,9 +561,30 @@ run_pass() {
 
     await_window "$mode"
     drive_surface
-    capture_full_output "$raw"
-    crop_fixed "$raw" "$staged"
+    capture_window "$staged" "$mode"
+    measure_capture "$staged" "$mode"
+    PASS_GEOMETRY+=("$mode=$CAPTURE_GEOMETRY")
+    printf 'pass %s: captured %s\n' "$mode" "$CAPTURE_GEOMETRY"
     stop_app
+}
+
+# R5.1: the pair has to be diffable, which means both passes must have captured the
+# same window at the same size. They cannot differ for any legitimate reason — the
+# window bounds are pinned by env and the theme does not resize anything — so a
+# mismatch means the fixture drifted, or `spectacle -a` grabbed a window that was
+# not Zeo. Either way the pair is worthless, and a worthless pair must not be
+# published: it would look perfectly plausible in the gate.
+assert_pair_is_diffable() {
+    local first="" entry geom
+
+    for entry in "${PASS_GEOMETRY[@]}"; do
+        geom="${entry#*=}"
+        if [ -z "$first" ]; then
+            first="$geom"
+        elif [ "$geom" != "$first" ]; then
+            die "fixture: the passes captured different geometries (${PASS_GEOMETRY[*]}) — the window drifted, or spectacle captured a window that was not Zeo. The pair would not be diffable. No PNG written."
+        fi
+    done
 }
 
 # --- Run both passes, then publish.
@@ -523,11 +598,13 @@ for appearance in light dark; do
     run_pass "$appearance"
 done
 
+assert_pair_is_diffable
+
 # Publish only now: a pair is either whole or absent, never half-written.
 mkdir -p "$OUT_DIR/$LABEL"
 for appearance in light dark; do
     mv -f "$WORK/stage/$SURFACE-$appearance.png" "$OUT_DIR/$LABEL/$SURFACE-$appearance.png"
 done
 
-printf 'OK: %s/%s/%s-{light,dark}.png (crop %s, window %s)\n' \
-    "$OUT_DIR" "$LABEL" "$SURFACE" "$CROP" "$WINDOW_SIZE"
+printf 'OK: %s/%s/%s-{light,dark}.png (active window, %s, themes %s / %s)\n' \
+    "$OUT_DIR" "$LABEL" "$SURFACE" "${PASS_GEOMETRY[0]#*=}" "$THEME_LIGHT" "$THEME_DARK"
