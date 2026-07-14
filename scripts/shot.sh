@@ -68,6 +68,17 @@ THEME_LIGHT="$DEFAULT_THEME_LIGHT"
 THEME_DARK="$DEFAULT_THEME_DARK"
 KEYS=()
 
+# GOTCHA: the throwaway config dir means the fixture is an UNTRUSTED worktree, so Zed
+# raises its "Unrecognized Project / Restricted Mode" modal over the editor. That modal
+# does two things, and the second is the dangerous one: it covers the very surface the
+# capture exists to show, and it HOLDS FOCUS -- so every --keys chord would be delivered
+# to the modal instead of the editor, and the driven surfaces would silently capture the
+# wrong thing. `session.trust_all_worktrees` dismisses it declaratively; sending `enter`
+# would work too, but only if the keystroke lands, which is exactly the kind of thing that
+# fails once and is never noticed. The key predates story 002 (it is in the baseline
+# commit), so the banked pre-change binary parses it too -- had it not, the whole settings
+# file would have been rejected and the THEME would have gone silently unpinned.
+
 # The fixture. Pinned here — not chosen at run time — so that every before/after
 # pair is the same window, showing the same file, from the same clean profile.
 #
@@ -265,6 +276,43 @@ for tool in spectacle magick; do
     fi
 done
 
+# A capture taken while the session is LOCKED comes back the right size, with the
+# right name, and exit 0 — and BLANK inside. KWin does not paint the contents of
+# windows the lock screen occludes, so `spectacle -a` hands back a perfectly
+# well-formed PNG of an empty pane.
+#
+# This is the worst failure this script can have, and it is worse than a crash: not a
+# MISSING capture but a WRONG one that looks right. Every downstream guard waves it
+# through — the file is non-zero, it decodes, and the geometry pair-check passes
+# because BOTH passes are equally blank. Nothing in the artefact says "this is a
+# picture of nothing". So the check cannot live after the capture; it has to happen
+# here, before a window is ever launched.
+#
+# Found the hard way, and only by accident: a run against the banked baseline binary
+# produced flawless, empty PNGs, and it took a FULL-SCREEN capture — outside the
+# harness — to see the lock screen and understand why. Two wrong causes were blamed
+# first (the trust modal, then --settle). This guard is the cheap version of that
+# afternoon.
+session_is_locked() {
+    local session_id locked
+
+    command -v loginctl >/dev/null 2>&1 || return 1
+
+    session_id="${XDG_SESSION_ID:-}"
+    if [ -z "$session_id" ]; then
+        session_id="$(loginctl --no-legend list-sessions 2>/dev/null |
+            awk -v user="$(id -un)" '$3 == user { print $1; exit }')"
+    fi
+    [ -n "$session_id" ] || return 1
+
+    locked="$(loginctl show-session "$session_id" --property=LockedHint --value 2>/dev/null || true)"
+    [ "$locked" = "yes" ]
+}
+
+if session_is_locked; then
+    die "the desktop session is LOCKED. A capture taken now would be correctly sized, non-empty and BLANK — KWin does not paint occluded windows, and no check downstream can tell the difference. Unlock the session, keep it unlocked, and re-run. No PNG written."
+fi
+
 if [ "${#KEYS[@]}" -gt 0 ]; then
     # Probe ydotool for real; never assume. A driver that cannot fire would capture
     # the undriven editor under the driven surface's name, silently corrupting the
@@ -455,6 +503,9 @@ write_settings() {
   "telemetry": {
     "diagnostics": false,
     "metrics": false
+  },
+  "session": {
+    "trust_all_worktrees": true
   }
 }
 EOF

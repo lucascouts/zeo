@@ -181,6 +181,22 @@ make_shims() {
     ln -sf "$(command -v "$tool")" "$SHIM/$tool"
   done
 
+  # `loginctl` is deliberately NOT in SANDBOX_TOOLS: with no loginctl on PATH the
+  # lock probe cannot answer and fails OPEN, which is what every other scenario
+  # wants (they are not testing the lock). Only this mode provides one, and it
+  # reports the session as locked however the script chooses to ask.
+  if [ "$mode" = "locked-session" ]; then
+    cat >"$SHIM/loginctl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *LockedHint*)    printf 'yes\n' ;;
+  *list-sessions*) printf '7 1000 $(id -un) seat0 tty2\n' ;;
+  *)               : ;;
+esac
+EOF
+    chmod +x "$SHIM/loginctl"
+  fi
+
   if [ "$mode" = "spectacle-fails" ]; then
     cat >"$SHIM/spectacle" <<EOF
 #!/usr/bin/env bash
@@ -598,6 +614,46 @@ run_shot "$SHIM" --label before --surface command-palette \
 assert_zero "s8: a driven surface with no --keys still captures" "$rc"
 assert_log_matches "s8: ...but warns that it is being captured AT REST (the PNG shows the editor)" \
   'WARN.*AT REST' "$TMP/last.log"
+
+# --- Scenario 9: a LOCKED session is refused, before anything is launched ---------
+#
+# The worst capture this script can produce is not a missing one — it is a blank one
+# that looks right. With the session locked, KWin does not paint the contents of the
+# windows the lock screen occludes, so `spectacle -a` returns a correctly-sized,
+# non-zero, perfectly-decodable PNG of an EMPTY pane. Every guard downstream waves it
+# through: the file is non-empty (s2's check), it decodes (s1's check), and the
+# geometry pair-check (s7) passes because BOTH passes are equally blank.
+#
+# This is not hypothetical. It happened during the real capture run for story 002 and
+# was caught only by accident, by taking a full-screen shot outside the harness. Two
+# innocent causes were blamed first. The only place the check can work is BEFORE the
+# launch, which is where it now lives — and this scenario is what keeps it there.
+make_shims locked-session
+BIN="$TMP/locked-session/zeo"
+make_bin "$BIN" 0 "$BIN_LOG"
+OUT="$TMP/shots-s9"
+
+run_shot "$SHIM" --label before --surface editor --bin "$BIN" --out-dir "$OUT" --settle 0
+assert_nonzero "s9: a locked session is fatal — it does not capture a blank window" "$rc"
+assert_log_matches "s9: ...and says so, naming the lock rather than some downstream symptom" \
+  'LOCKED' "$TMP/last.log"
+assert_no_png "s9: no PNG is written — not even a plausible, correctly-sized, empty one" "$OUT"
+assert_eq "s9: the binary is never launched (no window is put on a locked screen)" \
+  "0" "$(grep -c '^launch args=' "$BIN_LOG" || true)"
+assert_eq "s9: spectacle is never invoked" \
+  "0" "$(grep -c . "$SPECTACLE_LOG" || true)"
+
+# The mirror image, and the assertion that keeps the guard from being vacuous: with no
+# lock reported, the SAME invocation must succeed. A guard that refuses everything
+# would pass every check above and quietly kill the harness.
+make_shims full
+BIN="$TMP/full/zeo"
+make_bin "$BIN" 0 "$BIN_LOG"
+OUT="$TMP/shots-s9b"
+
+run_shot "$SHIM" --label before --surface editor --bin "$BIN" --out-dir "$OUT" --settle 0
+assert_zero "s9: an UNLOCKED session still captures (the guard is not a blanket refusal)" "$rc"
+assert_file_nonempty "s9: ...and emits its PNGs as normal" "$OUT/before/editor-dark.png"
 
 # --- Summary ---------------------------------------------------------------------
 printf '\n%d checks, %d failures\n' "$CHECKS" "$FAILURES"
