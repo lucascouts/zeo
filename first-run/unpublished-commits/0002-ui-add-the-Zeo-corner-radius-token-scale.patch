@@ -1,0 +1,574 @@
+From c5dc2fa1024d1231f20e99f70592ee25fbe464f2 Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sat, 11 Jul 2026 23:11:20 -0300
+Subject: [PATCH 2/9] ui: add the Zeo corner-radius token scale
+
+Adds ZeoRadius -- the steps 0/2/4/6/8/12/16/full -- resolved through &App.
+Zed's radius usage is bimodal (rounded_sm x30, rounded_md x30) with no token at
+all; this gives corner radius the same settings-resolved treatment spacing
+already has.
+
+px() mirrors DynamicSpacing exactly: the 16px rem base lives only inside the
+ratio, and the result multiplies by the live ui_font_size -- never by a
+hard-coded 16. An implementation that pins the base compiles and passes every
+other assertion, then silently drifts away from spacing the moment a user
+changes ui_font_size.
+
+Unlike DynamicSpacing there is no density triple: density governs the air
+between elements, not the shape of one, so a 6px button stays 6px at
+Comfortable. `Full` is a fixed sentinel -- a pill is a shape declaration, not a
+measurement -- and is exempt from both ui_font_size and radius_scale.
+
+The two new dev-dependencies are workspace-internal (settings, theme_settings);
+the tests drive the real provider rather than a fake, so the token cannot pass
+while the settings spine is broken. No new external crate.
+
+Covers R1.1, R1.2, R1.3, R1.4, R1.7, R1.8.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ Cargo.lock                           |   2 +
+ crates/ui/Cargo.toml                 |   2 +
+ crates/ui/src/styles.rs              |   5 +
+ crates/ui/src/styles/radius.rs       | 142 ++++++++++++
+ crates/ui/src/styles/radius_tests.rs | 326 +++++++++++++++++++++++++++
+ 5 files changed, 477 insertions(+)
+ create mode 100644 crates/ui/src/styles/radius.rs
+ create mode 100644 crates/ui/src/styles/radius_tests.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 342df73326..c64435d6e8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -19706,9 +19706,11 @@ dependencies = [
+  "num-format",
+  "schemars 1.0.4",
+  "serde",
++ "settings",
+  "smallvec",
+  "strum 0.27.2",
+  "theme",
++ "theme_settings",
+  "ui_macros",
+  "windows 0.61.3",
+ ]
+diff --git a/crates/ui/Cargo.toml b/crates/ui/Cargo.toml
+index 7999a30064..ac9a2bbc60 100644
+--- a/crates/ui/Cargo.toml
++++ b/crates/ui/Cargo.toml
+@@ -36,6 +36,8 @@ windows.workspace = true
+ 
+ [dev-dependencies]
+ gpui = { workspace = true, features = ["test-support"] }
++settings = { workspace = true, features = ["test-support"] }
++theme_settings.workspace = true
+ 
+ [package.metadata.cargo-machete]
+ ignored = ["log"]
+diff --git a/crates/ui/src/styles.rs b/crates/ui/src/styles.rs
+index bc2399f54b..e05f8bc4a5 100644
+--- a/crates/ui/src/styles.rs
++++ b/crates/ui/src/styles.rs
+@@ -3,6 +3,7 @@ mod appearance;
+ mod color;
+ mod elevation;
+ mod platform;
++mod radius;
+ mod severity;
+ mod spacing;
+ mod typography;
+@@ -12,7 +13,11 @@ pub use appearance::*;
+ pub use color::*;
+ pub use elevation::*;
+ pub use platform::*;
++pub use radius::*;
+ pub use severity::*;
+ pub use spacing::*;
+ pub use typography::*;
+ pub use units::*;
++
++#[cfg(test)]
++mod radius_tests;
+diff --git a/crates/ui/src/styles/radius.rs b/crates/ui/src/styles/radius.rs
+new file mode 100644
+index 0000000000..bd87ac636f
+--- /dev/null
++++ b/crates/ui/src/styles/radius.rs
+@@ -0,0 +1,142 @@
++//! The Zeo radius scale — the shape half of the Zeo visual identity.
++//!
++//! Zeo invents no new numbers here: every step is a value Zed's chrome already
++//! uses. What the scale adds is the semantics — one named step per role, so that
++//! a button and a tab cannot drift apart on a whim.
++//!
++//! The scale resolves through [`App`] rather than through compile-time constants
++//! (R1.1), so a change to `ui_font_size` or to `zeo.radius_scale` reaches every
++//! corner in the app without a restart.
++
++use gpui::{App, Pixels, Rems, px, rems};
++
++/// The rem base the nominal steps below are quoted at.
++///
++/// It appears *only* in [`ZeoRadius::radius_ratio`] — never as the multiplier
++/// that produces pixels. See that method for why that distinction is the whole
++/// point.
++const BASE_REM_SIZE_IN_PX: f32 = 16.0;
++
++/// [`ZeoRadius::Full`] in pixels: large enough that whatever it rounds comes out
++/// a pill, at any size an element in this app plausibly reaches.
++const FULL_RADIUS_IN_PX: f32 = 9999.0;
++
++/// The live rem base: what one rem is worth in pixels right now.
++///
++/// `theme_settings` clamps this to at least 6px, so it is safe to divide by.
++fn ui_font_size(cx: &App) -> f32 {
++    theme::theme_settings(cx).ui_font_size(cx).into()
++}
++
++/// A step on the Zeo radius scale.
++///
++/// Variants name a *role*, not a pixel count, so a call site reads as the
++/// decision it is actually making: `.rounded(ZeoRadius::Md.px(cx))` says "this is
++/// a control", and stays right if the scale is later retuned.
++///
++/// Nested surfaces close over the scale (D5): `outer − padding` lands on another
++/// step of it — a `Xl` modal with `Base08` padding holds `Sm` content
++/// (12 − 8 = 4). That closure is what keeps a nested corner concentric, and it
++/// only survives a change of `ui_font_size` because both this scale and
++/// `DynamicSpacing` are the same multiple of the live rem base.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub enum ZeoRadius {
++    /// `0px` — editor surface, gutter, full-bleed.
++    None,
++    /// `2px` — inline chips, scrollbar thumb, list-row hover.
++    Xs,
++    /// `4px` — tags, badges, checkboxes.
++    Sm,
++    /// `6px` — buttons, inputs, tabs, list items. The workhorse of the scale.
++    Md,
++    /// `8px` — cards, panels, popovers, hover cards.
++    Lg,
++    /// `12px` — modals, command palette, app frame.
++    Xl,
++    /// `16px` — window corners, fullscreen overlays.
++    ///
++    /// Named `Xxl` rather than `2Xl` because an identifier cannot start with a
++    /// digit.
++    Xxl,
++    /// A pill — avatars, toggles, status dots.
++    ///
++    /// Fixed, and exempt from every scaling the steps above obey (D22).
++    Full,
++}
++
++impl ZeoRadius {
++    /// The step's pixel value at the [`BASE_REM_SIZE_IN_PX`] rem base, before any
++    /// scaling.
++    ///
++    /// [`Self::Full`] has none, and that is not an oversight: it is a shape
++    /// declaration rather than a measurement (D22), so there is no quantity for
++    /// the rem base or `zeo.radius_scale` to be a proportion *of*. `9999 ×
++    /// (ui_font_size / 16)` would be a bigger meaningless number, not a rounder
++    /// pill.
++    const fn nominal_px(&self) -> Option<f32> {
++        match self {
++            Self::None => Some(0.0),
++            Self::Xs => Some(2.0),
++            Self::Sm => Some(4.0),
++            Self::Md => Some(6.0),
++            Self::Lg => Some(8.0),
++            Self::Xl => Some(12.0),
++            Self::Xxl => Some(16.0),
++            Self::Full => None,
++        }
++    }
++
++    /// The step as a fraction of one rem, or nothing at all for the [`Self::Full`]
++    /// sentinel, which has no such fraction.
++    ///
++    /// This mirrors `DynamicSpacing::spacing_ratio`
++    /// (`crates/ui_macros/src/dynamic_spacing.rs:146-162`) and has to keep
++    /// mirroring it: the two scales get subtracted from each other (D5), and that
++    /// subtraction only closes while both are the same multiple of the same live
++    /// rem base.
++    ///
++    /// Hence the 16px base belongs *here*, inside the ratio, and never in
++    /// [`Self::px`], which multiplies by the user's actual `ui_font_size` (R1.3).
++    /// Hard-coding 16 there would compile, look correct at the default font size,
++    /// and quietly break the nesting for every user who changed it.
++    ///
++    /// Unlike `DynamicSpacing` there is no density arm (D21): density governs the
++    /// air *between* elements, not the shape *of* one, so a 6px button stays a
++    /// 6px button at Comfortable.
++    fn radius_ratio(&self, cx: &App) -> Option<f32> {
++        let nominal_px = self.nominal_px()?;
++
++        // Already clamped to the accepted range by the accessor. Clamping again
++        // here would only add a second place for the bounds to go stale.
++        let radius_scale = theme::theme_settings(cx).zeo_radius_scale(cx);
++
++        Some(nominal_px / BASE_REM_SIZE_IN_PX * radius_scale)
++    }
++
++    /// The radius in pixels, at the user's current `ui_font_size` and
++    /// `zeo.radius_scale`.
++    pub fn px(&self, cx: &App) -> Pixels {
++        let Some(ratio) = self.radius_ratio(cx) else {
++            return px(FULL_RADIUS_IN_PX);
++        };
++
++        px(ui_font_size(cx) * ratio)
++    }
++
++    /// The radius in rems, resolving to the same length [`Self::px`] returns.
++    ///
++    /// Both forms exist because gpui's style methods take both, and they have to
++    /// agree — otherwise half the call sites in the app would round differently
++    /// from the other half.
++    pub fn rems(&self, cx: &App) -> Rems {
++        let Some(ratio) = self.radius_ratio(cx) else {
++            // `Full` is exempt from rem scaling (D22), yet `Rems` is by
++            // construction a *multiple of* the rem base — so the base has to be
++            // divided back out here for this to land on the same fixed pixel value
++            // `px` returns, instead of drifting with the user's font size.
++            return rems(FULL_RADIUS_IN_PX / ui_font_size(cx));
++        };
++
++        rems(ratio)
++    }
++}
+diff --git a/crates/ui/src/styles/radius_tests.rs b/crates/ui/src/styles/radius_tests.rs
+new file mode 100644
+index 0000000000..19e33079d2
+--- /dev/null
++++ b/crates/ui/src/styles/radius_tests.rs
+@@ -0,0 +1,326 @@
++//! Unit tests for the Zeo radius token (story 002, sub-task 2.2 —
++//! R1.1, R1.2, R1.3, R1.4; D4, D5, D21, D22, D23).
++//!
++//! ## Materialisation (executor — do this BEFORE writing `radius.rs`)
++//!
++//! 1. Copy this file to `fork/crates/ui/src/styles/radius_tests.rs`.
++//! 2. Register it in `fork/crates/ui/src/styles.rs`, next to `mod radius;`:
++//!
++//!        #[cfg(test)]
++//!        mod radius_tests;
++//!
++//! 3. Add the dev-dependencies this test needs to `fork/crates/ui/Cargo.toml`:
++//!
++//!        [dev-dependencies]
++//!        gpui = { workspace = true, features = ["test-support"] }   # already there
++//!        settings = { workspace = true, features = ["test-support"] }
++//!        theme_settings.workspace = true
++//!
++//!    The test drives the REAL `ThemeSettingsProviderImpl` (registered by
++//!    `theme_settings::init`) rather than a hand-rolled fake. That is deliberate:
++//!    a fake provider would have to be edited every time 2.1 extends the trait,
++//!    and it would let the token pass a test while the real settings spine is
++//!    broken. Neither `settings` nor `theme_settings` depends on `ui`, so these
++//!    dev-dependencies introduce no cycle.
++//! 4. Run: `cd fork && cargo test -p ui radius`
++//!    (`cd fork` is mandatory — cargo reads `.cargo/config.toml` from the CWD, and
++//!    `--manifest-path` from the workspace root silently drops the fork's
++//!    rustflags. See `docs/BUILD.md:26-31`.)
++//!
++//! ## Expected Red (confirm this BEFORE implementing — do not skip)
++//!
++//! A compile error, not an assertion failure:
++//!
++//!     error[E0432]: unresolved import `crate::ZeoRadius`
++//!                   no `ZeoRadius` in the root
++//!
++//! That is the right failure: `crates/ui/src/styles/radius.rs` does not exist
++//! yet. An error naming `DynamicSpacing`, `SettingsStore` or `theme_settings`
++//! instead means the test itself is broken — fix the test.
++//!
++//! Once `ZeoRadius` exists, the test that should fail LAST is
++//! `steps_scale_with_ui_font_size`: an implementation that hard-codes the 16px
++//! rem base compiles, and passes every other test in this file. That single test
++//! is the reason this file exists (`dynamic_spacing.rs:159-162`).
++//!
++//! ## The contract this file pins
++//!
++//! `ZeoRadius::{None, Xs, Sm, Md, Lg, Xl, Xxl, Full}`, deriving
++//! `Debug, Clone, Copy, PartialEq`, with `px(&self, cx: &App) -> Pixels` and
++//! `rems(&self, cx: &App) -> Rems`.
++//! (`Xxl` is the 16px step — `2xl` is not a legal Rust identifier. Renaming a
++//! variant later is a cross-cutting edit once 003 has spread it: design.md
++//! "Integration Points" makes these names a published API.)
++
++use gpui::{App, Pixels, TestAppContext, UpdateGlobal};
++use settings::{ParseStatus, SettingsStore};
++
++use crate::{DynamicSpacing, ZeoRadius};
++
++/// Every step except `Full`, in scale order.
++const SCALE: [(ZeoRadius, f32); 7] = [
++    (ZeoRadius::None, 0.),
++    (ZeoRadius::Xs, 2.),
++    (ZeoRadius::Sm, 4.),
++    (ZeoRadius::Md, 6.),
++    (ZeoRadius::Lg, 8.),
++    (ZeoRadius::Xl, 12.),
++    (ZeoRadius::Xxl, 16.),
++];
++
++/// The `Full` sentinel (D22): a pill is a shape declaration, not a measurement.
++const FULL_PX: f32 = 9999.;
++
++/// `Pixels` is an `f32` newtype; the token multiplies, so compare with a
++/// tolerance rather than pretending the arithmetic is exact.
++fn assert_px(label: &str, actual: Pixels, expected: f32) {
++    let actual: f32 = actual.into();
++    assert!(
++        (actual - expected).abs() < 0.01,
++        "{label}: expected {expected}px, got {actual}px"
++    );
++}
++
++fn init_test(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let settings_store = SettingsStore::test(cx);
++        cx.set_global(settings_store);
++        theme_settings::init(theme::LoadThemes::JustBase, cx);
++    });
++}
++
++fn write_user_settings(cx: &mut TestAppContext, json: &str) {
++    cx.update(|cx| {
++        SettingsStore::update_global(cx, |store, cx| {
++            let result = store.set_user_settings(json, cx);
++            assert!(
++                !matches!(result.parse_status, ParseStatus::Failed { .. }),
++                "settings must accept: {json}\n{result:?}"
++            );
++        });
++    });
++}
++
++fn resolve(cx: &mut TestAppContext, radius: ZeoRadius) -> Pixels {
++    cx.update(|cx: &mut App| radius.px(cx))
++}
++
++#[gpui::test]
++fn each_step_resolves_to_the_scale_at_the_default_ui_font_size(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // The gpui test harness pins `ui_font_size` to 14
++    // (settings/src/settings_file.rs:112), NOT to default.json's 16. Every nominal
++    // value in SCALE is the design scale AT ui_font_size 16, so the harness default
++    // must be overridden explicitly or these assertions pin the wrong numbers.
++    write_user_settings(cx, r#"{"ui_font_size": 16}"#);
++
++    for (radius, expected) in SCALE {
++        assert_px(&format!("{radius:?} @ ui_font_size 16"), resolve(cx, radius), expected);
++    }
++    assert_px("Full @ ui_font_size 16", resolve(cx, ZeoRadius::Full), FULL_PX);
++}
++
++/// THE test. `DynamicSpacing::px(cx)` is `ui_font_size × ratio`, NOT `16 × ratio`
++/// (`crates/ui_macros/src/dynamic_spacing.rs:159-162`). A radius token that
++/// hard-codes the 16px rem base passes every other assertion in this file and
++/// silently drifts away from spacing the moment a user changes `ui_font_size` —
++/// which breaks the nested-radius closure (D5) in the field, where nobody is
++/// looking. One `ui_font_size` value cannot catch that. Two can.
++#[gpui::test]
++fn steps_scale_with_ui_font_size_not_with_a_fixed_16px_base(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    write_user_settings(cx, r#"{"ui_font_size": 20}"#);
++
++    // 20 / 16 = 1.25.
++    for (radius, base) in SCALE {
++        assert_px(
++            &format!("{radius:?} @ ui_font_size 20"),
++            resolve(cx, radius),
++            base * 1.25,
++        );
++    }
++
++    let md: f32 = resolve(cx, ZeoRadius::Md).into();
++    assert!(
++        (md - 6.0).abs() > 0.01,
++        "Md must NOT stay at 6px when ui_font_size is 20 — a token pinned to a 16px \
++         rem base is the exact defect this test exists to catch (R1.3)"
++    );
++
++    // And the token must track a change in the other direction too.
++    write_user_settings(cx, r#"{"ui_font_size": 12}"#);
++    assert_px("Md @ ui_font_size 12", resolve(cx, ZeoRadius::Md), 6.0 * 0.75);
++}
++
++/// D22: `9999 × (ui_font_size / 16)` is meaningless.
++#[gpui::test]
++fn full_is_a_fixed_sentinel_exempt_from_scaling(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    assert_px("Full @ 16", resolve(cx, ZeoRadius::Full), FULL_PX);
++
++    write_user_settings(cx, r#"{"ui_font_size": 20}"#);
++    assert_px("Full @ 20", resolve(cx, ZeoRadius::Full), FULL_PX);
++
++    write_user_settings(cx, r#"{"ui_font_size": 20, "zeo": {"radius_scale": 1.5}}"#);
++    assert_px(
++        "Full @ 20 with radius_scale 1.5",
++        resolve(cx, ZeoRadius::Full),
++        FULL_PX,
++    );
++}
++
++/// D21: density governs the air *between* elements, not the shape *of* one.
++/// A 6px button stays 6px at Comfortable. Unlike `DynamicSpacing`, the radius
++/// scale has no density triple — do not copy that shape.
++#[gpui::test]
++fn the_scale_is_density_invariant(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let at_default: Vec<Pixels> = SCALE.iter().map(|(r, _)| resolve(cx, *r)).collect();
++    let spacing_at_default = cx.update(|cx: &mut App| DynamicSpacing::Base08.px(cx));
++
++    for density in ["compact", "comfortable"] {
++        write_user_settings(
++            cx,
++            &format!(r#"{{"unstable.ui_density": "{density}"}}"#),
++        );
++
++        // Guard against a vacuous pass: prove the density lever actually moved
++        // something before concluding that radius correctly ignored it.
++        let spacing = cx.update(|cx: &mut App| DynamicSpacing::Base08.px(cx));
++        assert_ne!(
++            spacing, spacing_at_default,
++            "DynamicSpacing must react to `{density}` density — if it does not, this \
++             test proves nothing about radius"
++        );
++
++        for ((radius, _), expected) in SCALE.iter().zip(&at_default) {
++            assert_eq!(
++                resolve(cx, *radius),
++                *expected,
++                "{radius:?} must resolve identically at `{density}` density (D21)"
++            );
++        }
++    }
++}
++
++/// D23: the one concrete knob the `zeo` namespace ships. Without a consumer it
++/// would be orphan code — which the Quality Gate forbids — so the token must
++/// actually multiply by it.
++#[gpui::test]
++fn radius_scale_multiplies_every_step(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    write_user_settings(cx, r#"{"ui_font_size": 16, "zeo": {"radius_scale": 1.5}}"#);
++    for (radius, base) in SCALE {
++        assert_px(
++            &format!("{radius:?} @ radius_scale 1.5"),
++            resolve(cx, radius),
++            base * 1.5,
++        );
++    }
++
++    write_user_settings(cx, r#"{"ui_font_size": 16, "zeo": {"radius_scale": 0.5}}"#);
++    assert_px("Md @ radius_scale 0.5", resolve(cx, ZeoRadius::Md), 3.0);
++
++    // The knob composes with ui_font_size: 6 × (20/16) × 1.5 = 11.25.
++    write_user_settings(cx, r#"{"ui_font_size": 20, "zeo": {"radius_scale": 1.5}}"#);
++    assert_px(
++        "Md @ ui_font_size 20 and radius_scale 1.5",
++        resolve(cx, ZeoRadius::Md),
++        11.25,
++    );
++}
++
++#[gpui::test]
++fn the_scale_is_strictly_monotonic(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for font_size in ["16", "20"] {
++        write_user_settings(cx, &format!(r#"{{"ui_font_size": {font_size}}}"#));
++
++        let mut previous = f32::NEG_INFINITY;
++        for (radius, _) in SCALE {
++            let value: f32 = resolve(cx, radius).into();
++            assert!(
++                value > previous || (radius == ZeoRadius::None && value == 0.),
++                "{radius:?} ({value}px) must exceed the step below it ({previous}px) \
++                 @ ui_font_size {font_size}"
++            );
++            previous = value;
++        }
++
++        let full: f32 = resolve(cx, ZeoRadius::Full).into();
++        assert!(full > previous, "Full ({full}px) tops the scale");
++    }
++}
++
++/// D5, verified against BOTH scales. `outer − padding` only lands on the radius
++/// scale if the padding came from `DynamicSpacing` — hard-coding the padding
++/// literals would pin nothing, and D5's own rule ("any change to either scale
++/// must re-verify closure") would be unenforceable.
++///
++/// The four cases are design.md §Radius:
++///   modal / command palette  12 − 8 = 4
++///   popover, card             8 − 4 = 4
++///   panel                     8 − 6 = 2
++///   window → content         16 − 4 = 12
++#[gpui::test]
++fn nested_radius_closure_holds_against_the_real_spacing_scale(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // Both scales are ui_font_size-proportional, so closure must survive a change
++    // of rem base. If it does not, one of the two scales is not tracking it.
++    for font_size in ["16", "20"] {
++        write_user_settings(cx, &format!(r#"{{"ui_font_size": {font_size}}}"#));
++
++        let cases = [
++            ("modal / command palette", ZeoRadius::Xl, DynamicSpacing::Base08, ZeoRadius::Sm),
++            ("popover, card", ZeoRadius::Lg, DynamicSpacing::Base04, ZeoRadius::Sm),
++            ("panel", ZeoRadius::Lg, DynamicSpacing::Base06, ZeoRadius::Xs),
++            ("window → content", ZeoRadius::Xxl, DynamicSpacing::Base04, ZeoRadius::Xl),
++        ];
++
++        for (case, outer, padding, inner) in cases {
++            let (outer_px, padding_px, inner_px) = cx.update(|cx: &mut App| {
++                (
++                    f32::from(outer.px(cx)),
++                    f32::from(padding.px(cx)),
++                    f32::from(inner.px(cx)),
++                )
++            });
++
++            assert!(
++                (outer_px - padding_px - inner_px).abs() < 0.01,
++                "{case} @ ui_font_size {font_size}: outer {outer:?} ({outer_px}px) − \
++                 padding {padding:?} ({padding_px}px) must land on {inner:?} ({inner_px}px), \
++                 got {}px (D5)",
++                outer_px - padding_px
++            );
++        }
++    }
++}
++
++/// The `rems` form must agree with the `px` form: `rems × ui_font_size = px`.
++/// If they disagree, half the call sites round differently from the other half.
++#[gpui::test]
++fn rems_and_px_agree(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    write_user_settings(cx, r#"{"ui_font_size": 20}"#);
++
++    for (radius, _) in SCALE {
++        let (from_rems, from_px) = cx.update(|cx: &mut App| {
++            let rem_size = theme::theme_settings(cx).ui_font_size(cx);
++            (radius.rems(cx).to_pixels(rem_size), radius.px(cx))
++        });
++        assert_px(
++            &format!("{radius:?}: rems() and px() agree"),
++            from_rems,
++            from_px.into(),
++        );
++    }
++}
+-- 
+2.55.0
+

@@ -1,0 +1,504 @@
+From 74d0c5443aa9e02b14dc0cacbbfc21e06dca7951 Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sat, 11 Jul 2026 23:11:20 -0300
+Subject: [PATCH 1/9] theme: expose Zeo design tokens through the settings
+ provider
+
+Adds the `zeo` settings namespace with its first concrete knob,
+`zeo.radius_scale` (f32, default 1.0), and the `zeo_radius_scale` accessor on
+ThemeSettingsProvider. Every Zeo design token resolves through this hook rather
+than a compile-time constant, so a settings change reaches open windows with no
+restart -- SettingsStore already refreshes on any change, so live reload needs
+no new code.
+
+The scale is clamped to 0.5-2.0 on every read, mirroring clamp_font_size. This
+is a user-editable JSON file: 0 would square every corner in the app and 1000 is
+a rendering pathology. A validated knob is what the settings-UI story inherits,
+not a raw f32.
+
+`zeo` is a nested top-level key, so it is a sibling group on SettingsContent
+(like `title_bar`) with its own Settings impl -- ThemeSettingsContent holds the
+flattened root keys and is not its home.
+
+Covers R1.1, R1.5, R1.6, R1.7.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ assets/settings/default.json                  |   6 +
+ crates/settings/src/vscode_import.rs          |   3 +
+ .../settings_content/src/settings_content.rs  |   5 +
+ crates/settings_content/src/zeo.rs            |  26 ++
+ crates/theme/src/theme_settings_provider.rs   |   6 +
+ crates/theme_settings/src/theme_settings.rs   |  11 +
+ crates/theme_settings/src/zeo.rs              |  71 ++++++
+ .../theme_settings/src/zeo_settings_tests.rs  | 235 ++++++++++++++++++
+ 8 files changed, 363 insertions(+)
+ create mode 100644 crates/settings_content/src/zeo.rs
+ create mode 100644 crates/theme_settings/src/zeo.rs
+ create mode 100644 crates/theme_settings/src/zeo_settings_tests.rs
+
+diff --git a/assets/settings/default.json b/assets/settings/default.json
+index 0e42d27e98..b6c143664c 100644
+--- a/assets/settings/default.json
++++ b/assets/settings/default.json
+@@ -2789,4 +2789,10 @@
+       "enabled": false,
+     },
+   },
++  // Knobs for the Zeo visual identity.
++  "zeo": {
++    // A multiplier applied to every step of the Zeo radius scale.
++    // Values outside 0.5–2.0 are clamped to that range, not rejected.
++    "radius_scale": 1.0,
++  },
+ }
+diff --git a/crates/settings/src/vscode_import.rs b/crates/settings/src/vscode_import.rs
+index 0d2f551143..2c66993de4 100644
+--- a/crates/settings/src/vscode_import.rs
++++ b/crates/settings/src/vscode_import.rs
+@@ -224,6 +224,9 @@ impl VsCodeSettings {
+             modeline_lines: None,
+             feature_flags: None,
+             instrumentation: None,
++            // No VS Code counterpart: the Zeo namespace is fork-specific, so an
++            // import must not synthesise a value for it.
++            zeo: None,
+         }
+     }
+ 
+diff --git a/crates/settings_content/src/settings_content.rs b/crates/settings_content/src/settings_content.rs
+index f0f652d2ba..4b9e288238 100644
+--- a/crates/settings_content/src/settings_content.rs
++++ b/crates/settings_content/src/settings_content.rs
+@@ -12,6 +12,7 @@ mod terminal;
+ mod theme;
+ mod title_bar;
+ mod workspace;
++mod zeo;
+ 
+ pub use action::{ActionName, ActionWithArguments, CommandAliasTarget};
+ pub use agent::*;
+@@ -31,6 +32,7 @@ pub use terminal::*;
+ pub use theme::*;
+ pub use title_bar::*;
+ pub use workspace::*;
++pub use zeo::*;
+ 
+ use collections::{HashMap, IndexMap};
+ use schemars::JsonSchema;
+@@ -263,6 +265,9 @@ pub struct SettingsContent {
+     /// Settings for developer-oriented instrumentation tools (profilers,
+     /// tracers, etc.) that can be toggled at runtime.
+     pub instrumentation: Option<InstrumentationSettingsContent>,
++
++    /// Settings for the Zeo visual identity.
++    pub zeo: Option<ZeoSettingsContent>,
+ }
+ 
+ /// Configuration for developer-oriented instrumentation tools that collect
+diff --git a/crates/settings_content/src/zeo.rs b/crates/settings_content/src/zeo.rs
+new file mode 100644
+index 0000000000..18737ab051
+--- /dev/null
++++ b/crates/settings_content/src/zeo.rs
+@@ -0,0 +1,26 @@
++use schemars::JsonSchema;
++use serde::{Deserialize, Serialize};
++use settings_macros::{MergeFrom, with_fallible_options};
++
++/// The `zeo` namespace: user-facing knobs for the Zeo visual identity.
++///
++/// Every Zeo design token resolves its value from this group through
++/// `theme::ThemeSettingsProvider`, so a token is never a compile-time constant
++/// and a change here reaches open windows without a restart.
++#[with_fallible_options]
++#[derive(Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug)]
++pub struct ZeoSettingsContent {
++    /// A multiplier applied to every step of the Zeo radius scale.
++    ///
++    /// The range below only annotates the JSON schema, so an editor can hint the
++    /// bounds; it rejects nothing. Enforcement is `theme_settings`'
++    /// `clamp_radius_scale`, which clamps on every read — a typo can therefore
++    /// neither square every corner in the app (`0`) nor blow a radius up into a
++    /// rendering pathology (`1000`), and never costs the user their whole
++    /// settings file. The bounds are repeated as literals because this crate sits
++    /// *below* `theme_settings` in the dependency graph and cannot import them.
++    ///
++    /// Default: 1.0
++    #[schemars(range(min = 0.5, max = 2.0))]
++    pub radius_scale: Option<f32>,
++}
+diff --git a/crates/theme/src/theme_settings_provider.rs b/crates/theme/src/theme_settings_provider.rs
+index f3e05bc77b..d6a7f82960 100644
+--- a/crates/theme/src/theme_settings_provider.rs
++++ b/crates/theme/src/theme_settings_provider.rs
+@@ -21,6 +21,12 @@ pub trait ThemeSettingsProvider: Send + Sync + 'static {
+ 
+     /// Returns the current UI density setting.
+     fn ui_density(&self, cx: &App) -> UiDensity;
++
++    /// Returns the multiplier applied to every step of the Zeo radius scale.
++    ///
++    /// Already clamped to the accepted range, so callers can multiply by it
++    /// directly.
++    fn zeo_radius_scale(&self, cx: &App) -> f32;
+ }
+ 
+ struct GlobalThemeSettingsProvider(Box<dyn ThemeSettingsProvider>);
+diff --git a/crates/theme_settings/src/theme_settings.rs b/crates/theme_settings/src/theme_settings.rs
+index ff47093c0c..0f71937f54 100644
+--- a/crates/theme_settings/src/theme_settings.rs
++++ b/crates/theme_settings/src/theme_settings.rs
+@@ -7,6 +7,10 @@
+ 
+ mod schema;
+ mod settings;
++mod zeo;
++
++#[cfg(test)]
++mod zeo_settings_tests;
+ 
+ use std::sync::Arc;
+ 
+@@ -38,6 +42,9 @@ pub use crate::settings::{
+     reset_git_commit_buffer_font_size, reset_markdown_preview_font_size, reset_ui_font_size,
+     set_icon_theme, set_mode, set_theme, setup_ui_font,
+ };
++pub use crate::zeo::{
++    DEFAULT_RADIUS_SCALE, MAX_RADIUS_SCALE, MIN_RADIUS_SCALE, ZeoSettings, clamp_radius_scale,
++};
+ pub use theme::UiDensity;
+ 
+ struct ThemeSettingsProviderImpl;
+@@ -62,6 +69,10 @@ impl ThemeSettingsProvider for ThemeSettingsProviderImpl {
+     fn ui_density(&self, cx: &App) -> UiDensity {
+         ThemeSettings::get_global(cx).ui_density
+     }
++
++    fn zeo_radius_scale(&self, cx: &App) -> f32 {
++        ZeoSettings::get_global(cx).radius_scale()
++    }
+ }
+ 
+ /// Initialize the theme system with settings integration.
+diff --git a/crates/theme_settings/src/zeo.rs b/crates/theme_settings/src/zeo.rs
+new file mode 100644
+index 0000000000..d8b9eb6cc3
+--- /dev/null
++++ b/crates/theme_settings/src/zeo.rs
+@@ -0,0 +1,71 @@
++//! The `zeo` settings namespace — the values every Zeo design token resolves from.
++//!
++//! Live reload needs no code here: `SettingsStore` recomputes every registered
++//! setting on any change and refreshes open windows, so a token that reads
++//! [`ZeoSettings`] through `theme::ThemeSettingsProvider` picks up a user's edit
++//! without a restart.
++
++use settings::{RegisterSetting, Settings, SettingsContent};
++
++/// `zeo.radius_scale` when the user has not set it: the radius scale ships
++/// unmodified.
++pub const DEFAULT_RADIUS_SCALE: f32 = 1.0;
++
++/// The smallest accepted `zeo.radius_scale`. Below this, every corner in the app
++/// rounds to square.
++pub const MIN_RADIUS_SCALE: f32 = 0.5;
++
++/// The largest accepted `zeo.radius_scale`. Above this, a radius swallows the
++/// element it rounds.
++pub const MAX_RADIUS_SCALE: f32 = 2.0;
++
++/// Constrains a `zeo.radius_scale` to [`MIN_RADIUS_SCALE`]..=[`MAX_RADIUS_SCALE`].
++///
++/// An out-of-range value is clamped rather than rejected, so a typo in a
++/// hand-edited `settings.json` degrades to the nearest usable scale instead of
++/// failing the whole settings file.
++///
++/// Non-finite input falls back to [`DEFAULT_RADIUS_SCALE`], because `f32::clamp`
++/// returns NaN unchanged and a NaN radius would reach layout.
++pub fn clamp_radius_scale(radius_scale: f32) -> f32 {
++    if radius_scale.is_nan() {
++        return DEFAULT_RADIUS_SCALE;
++    }
++
++    radius_scale.clamp(MIN_RADIUS_SCALE, MAX_RADIUS_SCALE)
++}
++
++/// The Zeo visual identity settings, read from the `zeo` namespace.
++#[derive(Clone, Copy, Debug, PartialEq, RegisterSetting)]
++pub struct ZeoSettings {
++    /// Private, and stored exactly as the user wrote it: [`Self::radius_scale`]
++    /// is the only way out, so no caller can read an unclamped scale.
++    radius_scale: f32,
++}
++
++impl ZeoSettings {
++    /// Returns the multiplier applied to every step of the Zeo radius scale,
++    /// clamped to [`MIN_RADIUS_SCALE`]..=[`MAX_RADIUS_SCALE`].
++    ///
++    /// Clamping here rather than only at parse time means the bounds hold on
++    /// every read, however the value was supplied.
++    pub fn radius_scale(&self) -> f32 {
++        clamp_radius_scale(self.radius_scale)
++    }
++}
++
++impl Settings for ZeoSettings {
++    fn from_settings(content: &SettingsContent) -> Self {
++        // `Settings::from_settings` is documented to unwrap and panic when
++        // `default.json` lacks a key. This crate does supply the key, but a
++        // panicking read is not an option under this project's Rust rules, and a
++        // missing default is not worth crashing over: fall back instead.
++        let radius_scale = content
++            .zeo
++            .as_ref()
++            .and_then(|zeo| zeo.radius_scale)
++            .unwrap_or(DEFAULT_RADIUS_SCALE);
++
++        Self { radius_scale }
++    }
++}
+diff --git a/crates/theme_settings/src/zeo_settings_tests.rs b/crates/theme_settings/src/zeo_settings_tests.rs
+new file mode 100644
+index 0000000000..cb6190dcb2
+--- /dev/null
++++ b/crates/theme_settings/src/zeo_settings_tests.rs
+@@ -0,0 +1,235 @@
++//! Unit tests for the Zeo settings namespace and its `ThemeSettingsProvider`
++//! accessors (story 002, sub-task 2.1 — R1.1, R1.5, R1.6).
++//!
++//! ## Materialisation (executor — do this BEFORE writing any implementation)
++//!
++//! 1. Copy this file to `fork/crates/theme_settings/src/zeo_settings_tests.rs`.
++//! 2. Register it in `fork/crates/theme_settings/src/theme_settings.rs`, next to
++//!    the existing `mod schema; mod settings;` lines:
++//!
++//!        #[cfg(test)]
++//!        mod zeo_settings_tests;
++//!
++//! 3. No new dev-dependency is needed: `gpui/test-support` and
++//!    `settings/test-support` are already in this crate's `[dev-dependencies]`.
++//! 4. Run: `cd fork && cargo test -p theme_settings zeo_`
++//!
++//! ## Expected Red (confirm this BEFORE implementing — do not skip)
++//!
++//! A compile error, not an assertion failure:
++//!
++//!     error[E0599]: no method named `zeo_radius_scale` found for reference
++//!                   `&dyn ThemeSettingsProvider` in the current scope
++//!
++//! That is the right failure: the accessor added by 2.1 does not exist yet. If
++//! instead you see a *parse* or *macro* error, or an error naming `SettingsStore`
++//! or `LoadThemes`, the test is broken — fix the test, do not "fix" it by
++//! deleting an assertion.
++//!
++//! Once the trait method exists but the settings group does not, the second test
++//! goes Red on its own assertion instead: the store rejects (or ignores) the
++//! `zeo` key and the provider keeps returning `1.0`. Both are valid Red.
++//!
++//! ## What this test deliberately does NOT assert
++//!
++//! **Live reload is not asserted here, and must not be.** `SettingsStore` already
++//! calls `cx.refresh_windows()` on *any* user-settings change
++//! (`crates/settings/src/settings_store.rs:400`), so a render-count assertion
++//! would go green against an implementation that wired up nothing at all. The
++//! falsifiable claim is that the value the provider *returns* changes — R1.5's
++//! "applies without a restart" follows from that plus the refresh the store
++//! already performs.
++
++use gpui::{TestAppContext, UpdateGlobal, px};
++use settings::{ParseStatus, SettingsStore};
++
++fn init_test(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let settings_store = SettingsStore::test(cx);
++        cx.set_global(settings_store);
++        crate::init(theme::LoadThemes::JustBase, cx);
++    });
++}
++
++/// Writes raw user settings JSON, exactly as a user's `settings.json` would.
++///
++/// Deliberately raw JSON rather than a typed `SettingsContent` field write: the
++/// user-facing key path (`zeo.radius_scale`) is the contract story 006 inherits,
++/// and it must not be able to drift while the Rust field keeps compiling.
++fn write_user_settings(cx: &mut TestAppContext, json: &str) {
++    cx.update(|cx| {
++        SettingsStore::update_global(cx, |store, cx| {
++            let result = store.set_user_settings(json, cx);
++            assert!(
++                !matches!(result.parse_status, ParseStatus::Failed { .. }),
++                "the `zeo` settings namespace must accept this JSON: {json}\n{result:?}"
++            );
++        });
++    });
++}
++
++#[gpui::test]
++fn zeo_radius_scale_defaults_to_one(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let scale = cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx));
++
++    assert_eq!(
++        scale, 1.0,
++        "an unset `zeo.radius_scale` resolves to 1.0 — the token scale ships unmodified"
++    );
++}
++
++#[gpui::test]
++fn writing_zeo_radius_scale_changes_the_value_the_provider_returns(
++    cx: &mut TestAppContext,
++) {
++    init_test(cx);
++
++    let before = cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx));
++    assert_eq!(before, 1.0);
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 1.5}}"#);
++
++    let after = cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx));
++    assert_eq!(
++        after, 1.5,
++        "a Zeo token setting must be observable through ThemeSettingsProvider (R1.1): \
++         the provider is the single hook every token reads from, and story 006 hangs \
++         its knobs on it"
++    );
++}
++
++#[gpui::test]
++fn zeo_radius_scale_tracks_a_second_change_without_reinitialisation(
++    cx: &mut TestAppContext,
++) {
++    init_test(cx);
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 1.5}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        1.5
++    );
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 0.5}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        0.5,
++        "the value is resolved from the store on every read (R1.5) — not cached at init"
++    );
++}
++
++/// The provider is the *only* legitimate way a token reads settings, so the
++/// pre-existing accessor a Zeo token depends on (`ui_font_size` — the formula
++/// trap in 2.2) must be proven to track settings through the same hook.
++#[gpui::test]
++fn ui_font_size_is_observable_through_the_provider(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // The gpui test harness pins `ui_font_size` to 14
++    // (settings/src/settings_file.rs:112), NOT to default.json's 16, so tests are
++    // deterministic across platforms and fonts. Pin the product default explicitly:
++    // this test is about the value MOVING through the provider, and a harness
++    // artefact must not be what it pins.
++    write_user_settings(cx, r#"{"ui_font_size": 16}"#);
++
++    let default_size = cx.update(|cx| theme::theme_settings(cx).ui_font_size(cx));
++    assert_eq!(default_size, px(16.));
++
++    write_user_settings(cx, r#"{"ui_font_size": 20}"#);
++
++    let changed = cx.update(|cx| theme::theme_settings(cx).ui_font_size(cx));
++    assert_eq!(
++        changed,
++        px(20.),
++        "the radius token multiplies by this value (R1.3) — if it cannot move, \
++         2.2's ui_font_size assertions are vacuous"
++    );
++}
++
++// The clamp (R1.7 / D23). `settings.json` is hand-edited, so the knob must
++// survive a typo: an out-of-range value is *clamped, not rejected*. Note that
++// `write_user_settings` asserts the store accepts the JSON — so each of these
++// also proves the value is not rejected on the way in.
++//
++// The bounds are written as literals, never as `MIN_RADIUS_SCALE` /
++// `MAX_RADIUS_SCALE`. 0.5 and 2.0 are the published contract story 006 inherits;
++// asserting against the constants would let a change to the range silently
++// rewrite the expectation and keep the test green.
++
++#[gpui::test]
++fn zeo_radius_scale_below_the_floor_is_clamped_up(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // 0 would square every corner in the app.
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 0.0}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        0.5,
++        "a radius_scale below the floor is clamped up to 0.5, not rejected (R1.7)"
++    );
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 0.1}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        0.5
++    );
++
++    // A negative scale would be a nonsense radius rather than merely a small one.
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": -3.0}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        0.5
++    );
++}
++
++#[gpui::test]
++fn zeo_radius_scale_above_the_ceiling_is_clamped_down(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // 1000 is a rendering pathology, not a preference.
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 1000.0}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        2.0,
++        "a radius_scale above the ceiling is clamped down to 2.0, not rejected (R1.7)"
++    );
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 5.0}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        2.0
++    );
++}
++
++#[gpui::test]
++fn zeo_radius_scale_boundaries_are_preserved_exactly(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    // The bounds are legal values. A clamp written with the comparison the wrong
++    // way round would eat them, so pin both ends.
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 0.5}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        0.5,
++        "0.5 is inside the range — the floor itself must survive the clamp"
++    );
++
++    write_user_settings(cx, r#"{"zeo": {"radius_scale": 2.0}}"#);
++    assert_eq!(
++        cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx)),
++        2.0,
++        "2.0 is inside the range — the ceiling itself must survive the clamp"
++    );
++}
++
++/// Exercised directly rather than through the store: JSON has no literal for a
++/// non-finite number, so this path is unreachable from `settings.json` — but
++/// `f32::clamp` returns NaN unchanged, and a NaN radius would reach layout.
++#[test]
++fn clamp_radius_scale_is_total_over_non_finite_input() {
++    assert_eq!(crate::clamp_radius_scale(f32::NAN), 1.0);
++    assert_eq!(crate::clamp_radius_scale(f32::INFINITY), 2.0);
++    assert_eq!(crate::clamp_radius_scale(f32::NEG_INFINITY), 0.5);
++}
+-- 
+2.55.0
+

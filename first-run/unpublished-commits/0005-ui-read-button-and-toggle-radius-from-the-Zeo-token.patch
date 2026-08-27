@@ -1,0 +1,707 @@
+From cbcd2874c43cffc7b48831543c38df98216909d4 Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sun, 12 Jul 2026 00:20:22 -0300
+Subject: [PATCH 5/9] ui: read button and toggle radius from the Zeo token
+
+Converts the directly-styled controls, where the chokepoint converted the
+inherited ones. Buttons hold at the control step (6px) and no higher -- a 10px
+button in a code editor reads "web app in a window". The per-corner form stays:
+it is what leaves a button group's inner edges square so the group reads as one
+control, and GPUI's per-corner setters take a Pixels like every other radius
+setter, so the plain token covers it with no per-corner token API.
+
+Each control takes the step its role calls for rather than one blanket value:
+the checkbox stays at 4px, and the switch's track, thumb and placeholder dot stay
+full -- a switch is a pill and its knob is a circle. The visual step is
+unchanged; what changes is that it now comes from the token.
+
+The coverage grep alone could not have caught a mistake here -- it proves the
+literals are gone, never that the right step arrived, and it is blind to the
+per-corner forms entirely. The tests assert against the token's resolved value at
+two ui_font_size values AND at a non-default zeo.radius_scale: GPUI's rounded_*
+literals are rem-based and so already track ui_font_size, which makes
+radius_scale the only lever that can tell a token from the literal it replaced.
+
+Covers R2.7, R1.2.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ crates/ui/src/components.rs                   |   3 +
+ .../ui/src/components/button/button_like.rs   |  38 +-
+ .../ui/src/components/control_radius_tests.rs | 401 ++++++++++++++++++
+ crates/ui/src/components/toggle.rs            | 112 +++--
+ 4 files changed, 514 insertions(+), 40 deletions(-)
+ create mode 100644 crates/ui/src/components/control_radius_tests.rs
+
+diff --git a/crates/ui/src/components.rs b/crates/ui/src/components.rs
+index 12d5946627..aa888c412a 100644
+--- a/crates/ui/src/components.rs
++++ b/crates/ui/src/components.rs
+@@ -83,3 +83,6 @@ pub use tab_bar::*;
+ pub use toggle::*;
+ pub use tooltip::*;
+ pub use tree_view_item::*;
++
++#[cfg(test)]
++mod control_radius_tests;
+diff --git a/crates/ui/src/components/button/button_like.rs b/crates/ui/src/components/button/button_like.rs
+index 3436b8dca5..f0b952896d 100644
+--- a/crates/ui/src/components/button/button_like.rs
++++ b/crates/ui/src/components/button/button_like.rs
+@@ -1,12 +1,12 @@
+ use documented::Documented;
+ use gpui::{
+     AnyElement, AnyView, ClickEvent, CursorStyle, DefiniteLength, FocusHandle, Hsla, MouseButton,
+-    MouseClickEvent, MouseDownEvent, MouseUpEvent, Rems, Role, StyleRefinement, Toggled, relative,
+-    transparent_black,
++    MouseClickEvent, MouseDownEvent, MouseUpEvent, Rems, Role, Stateful, StyleRefinement, Toggled,
++    relative, transparent_black,
+ };
+ use smallvec::SmallVec;
+ 
+-use crate::{DynamicSpacing, ElevationIndex, prelude::*};
++use crate::{DynamicSpacing, ElevationIndex, ZeoRadius, prelude::*};
+ 
+ /// A trait for buttons that can be Selected. Enables setting the [`ButtonStyle`] of a button when it is selected.
+ pub trait SelectableButton: Toggleable {
+@@ -712,6 +712,21 @@ impl ParentElement for ButtonLike {
+ 
+ impl RenderOnce for ButtonLike {
+     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
++        self.element(cx)
++    }
++}
++
++impl ButtonLike {
++    /// The element [`RenderOnce::render`] builds, kept at its concrete type.
++    ///
++    /// `render` erases its return value to `impl IntoElement`, which puts the
++    /// `StyleRefinement` it applied permanently out of reach — of every caller, and
++    /// so of every test. The Zeo radius step a button actually renders with (R2.7) is
++    /// the one thing the coverage grep cannot see, so it has to be asserted, and this
++    /// seam is the only way to assert it against the element `render` really returns
++    /// rather than against a reconstruction of it. A reconstruction stays green
++    /// precisely when the original regresses.
++    pub(crate) fn element(self, cx: &mut App) -> Stateful<Div> {
+         let style = self
+             .selected_style
+             .filter(|_| self.selected)
+@@ -750,10 +765,19 @@ impl RenderOnce for ButtonLike {
+             })
+             .when(is_outlined, |this| this.border_1())
+             .when_some(self.rounding, |this, rounding| {
+-                this.when(rounding.top_left, |this| this.rounded_tl_sm())
+-                    .when(rounding.top_right, |this| this.rounded_tr_sm())
+-                    .when(rounding.bottom_right, |this| this.rounded_br_sm())
+-                    .when(rounding.bottom_left, |this| this.rounded_bl_sm())
++                // A button holds at the control step and no higher (design.md
++                // §Radius): "a 10px button in a code editor reads 'web app in a
++                // window'".
++                //
++                // The per-corner form is not decoration — it is what leaves a button
++                // group's inner edges square, so the group reads as one control. GPUI's
++                // per-corner setters take a `Pixels` like every other radius setter, so
++                // the plain token covers this; a per-corner token API would buy nothing.
++                let radius = ZeoRadius::Md.px(cx);
++                this.when(rounding.top_left, |this| this.rounded_tl(radius))
++                    .when(rounding.top_right, |this| this.rounded_tr(radius))
++                    .when(rounding.bottom_right, |this| this.rounded_br(radius))
++                    .when(rounding.bottom_left, |this| this.rounded_bl(radius))
+             })
+             .gap(DynamicSpacing::Base04.rems(cx))
+             .map(|this| match self.size {
+diff --git a/crates/ui/src/components/control_radius_tests.rs b/crates/ui/src/components/control_radius_tests.rs
+new file mode 100644
+index 0000000000..ea980a808e
+--- /dev/null
++++ b/crates/ui/src/components/control_radius_tests.rs
+@@ -0,0 +1,401 @@
++//! Unit tests for the Zeo control radius pilot (story 002, sub-task 4.1 — R2.7, R1.2).
++//!
++//! ## What these exist to catch, and the coverage grep cannot
++//!
++//! `grep -c '\.rounded_*()' == 0` passes just as happily if every button was converted
++//! to `ZeoRadius::Full`. It proves the literals are *gone*; it never proves the *right
++//! step* arrived. design.md's counter-rule ("do not over-round — a 10px button in a
++//! code editor reads 'web app in a window'") and its role table (pills and toggles at
++//! `Full`) pull in opposite directions, so the single thing 4.1 can get wrong is the
++//! single thing the grep cannot see. That is what is asserted here.
++//!
++//! ## Why the components are reached through named builders
++//!
++//! `RenderOnce::render` returns `impl IntoElement`. That erases the concrete element,
++//! and with it the `StyleRefinement` it applied — permanently, for every caller. The
++//! radius a control actually renders with is therefore unobservable through `render`,
++//! and gpui exposes no painted scene to a test either (`Window::rendered_frame` is
++//! crate-private). So each radius-bearing element is built by a named `pub(crate)`
++//! builder that `render` itself calls, and the tests assert against those. They are the
++//! element `render` uses, not a reconstruction of it — a reconstruction would stay green
++//! at precisely the moment the original regressed.
++//!
++//! ## Why `zeo.radius_scale` appears in every matrix
++//!
++//! Two `ui_font_size` values prove the radius is not a frozen `px(6.)`. They do **not**
++//! prove it came from the token, and it is worth being exact about why: gpui's
++//! `.rounded_md()` is `rems(0.375)` (`gpui_macros/src/styles.rs:1246-1250`), and Zed
++//! sets the window's rem size *from* `ui_font_size` (`theme_settings/src/settings.rs:601`)
++//! — so the literal is already font-size-proportional and tracks it to the pixel,
++//! exactly as `ZeoRadius::Md` does. At `radius_scale` 1.0 the two are numerically
++//! indistinguishable at every font size.
++//!
++//! `zeo.radius_scale` is what separates them. It is the token's own knob (D23) and
++//! nothing in gpui honours it, so a control that moves with it is reading the token and
++//! a control that does not still has a literal in it.
++//!
++//! The one exception is `ZeoRadius::Full`, which is exempt from both levers by
++//! construction (D22): it resolves to a flat 9999px, which is exactly what
++//! `.rounded_full()` sets. For the switch, therefore, *no* test can distinguish token
++//! from literal — there is no observable difference to catch. What the switch tests do
++//! pin is the step itself: that a pill was not "helpfully" rounded down to the control
++//! step, which is the over-round trap running in reverse.
++
++use gpui::{
++    AbsoluteLength, App, Pixels, StyleRefinement, Styled, TestAppContext, UpdateGlobal, px,
++};
++use settings::{ParseStatus, SettingsStore};
++
++use crate::{ButtonLike, Checkbox, Switch, ZeoRadius};
++
++/// In the order `StyleRefinement::corner_radii` declares them.
++const CORNERS: [&str; 4] = ["top_left", "top_right", "bottom_right", "bottom_left"];
++
++/// The settings every step assertion is made under.
++///
++/// 16 is the rem base the design scale is quoted at, and it has to be written out: the
++/// gpui test harness pins `ui_font_size` to 14 (`settings/src/settings_file.rs:112`),
++/// not to `default.json`'s 16. 20 proves the step is a proportion of the live rem base
++/// rather than a frozen pixel count. `radius_scale` is the discriminator — see the
++/// module header for why the first two cannot be.
++const SETTINGS: [(&str, &str); 3] = [
++    ("ui_font_size 16", r#"{"ui_font_size": 16}"#),
++    ("ui_font_size 20", r#"{"ui_font_size": 20}"#),
++    (
++        "ui_font_size 16 + zeo.radius_scale 1.5",
++        r#"{"ui_font_size": 16, "zeo": {"radius_scale": 1.5}}"#,
++    ),
++];
++
++fn init_test(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let settings_store = SettingsStore::test(cx);
++        cx.set_global(settings_store);
++        theme_settings::init(theme::LoadThemes::JustBase, cx);
++    });
++}
++
++fn write_user_settings(cx: &mut TestAppContext, json: &str) {
++    cx.update(|cx| {
++        SettingsStore::update_global(cx, |store, cx| {
++            let result = store.set_user_settings(json, cx);
++            assert!(
++                !matches!(result.parse_status, ParseStatus::Failed { .. }),
++                "settings must accept: {json}\n{result:?}"
++            );
++        });
++    });
++}
++
++/// The live rem base, and what `radius` resolves to under it.
++///
++/// The expected value is always taken from the token, never written down: a test that
++/// hard-codes 6.0 pins the literal it was meant to remove, and would go green against a
++/// re-introduced `.rounded_md()`.
++fn resolve(cx: &mut TestAppContext, radius: ZeoRadius) -> (Pixels, Pixels) {
++    cx.update(|cx: &mut App| {
++        (
++            theme::theme_settings(cx).ui_font_size(cx),
++            radius.px(cx),
++        )
++    })
++}
++
++fn style_of<E: Styled>(cx: &mut TestAppContext, build: impl FnOnce(&mut App) -> E) -> StyleRefinement {
++    cx.update(|cx: &mut App| {
++        let mut element = build(cx);
++        element.style().clone()
++    })
++}
++
++/// The element's four corners, in `CORNERS` order. `None` means the element set no
++/// radius on that corner at all — a real state, and one `ButtonLike` depends on.
++fn corner_radii(style: &StyleRefinement, rem_size: Pixels) -> [Option<Pixels>; 4] {
++    let resolve = |radius: Option<AbsoluteLength>| {
++        radius.map(|radius| match radius {
++            AbsoluteLength::Pixels(pixels) => pixels,
++            AbsoluteLength::Rems(rems) => rems.to_pixels(rem_size),
++        })
++    };
++
++    [
++        resolve(style.corner_radii.top_left),
++        resolve(style.corner_radii.top_right),
++        resolve(style.corner_radii.bottom_right),
++        resolve(style.corner_radii.bottom_left),
++    ]
++}
++
++/// All four corners carry `expected`, and none of them is missing.
++///
++/// The missing case is the point: `ButtonLike` rounds corner by corner, so a conversion
++/// that dropped one of the four setters would leave a button with three round corners
++/// and a square one — and the coverage grep would call that a clean pass.
++fn assert_every_corner(label: &str, style: &StyleRefinement, rem_size: Pixels, expected: Pixels) {
++    for (corner, radius) in CORNERS.iter().zip(corner_radii(style, rem_size)) {
++        let Some(radius) = radius else {
++            panic!(
++                "{label}: {corner} carries no radius at all — the per-corner form was \
++                 partially converted"
++            );
++        };
++
++        assert_eq!(
++            radius, expected,
++            "{label}: {corner} must resolve to the Zeo token's own value ({expected:?}), \
++             got {radius:?} (R2.7, R1.2)"
++        );
++    }
++}
++
++/// `Pixels` is an `f32` newtype and the token multiplies, so compare with a tolerance
++/// rather than pretending the arithmetic is exact.
++fn assert_px(label: &str, actual: Pixels, expected: f32) {
++    let actual: f32 = actual.into();
++    assert!(
++        (actual - expected).abs() < 0.01,
++        "{label}: expected {expected}px, got {actual}px"
++    );
++}
++
++// --- ButtonLike ---------------------------------------------------------------
++
++/// R2.7. A button holds at the control step, in every corner, under every lever the
++/// token exposes.
++#[gpui::test]
++fn a_button_takes_the_control_step_in_every_corner(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for (label, json) in SETTINGS {
++        write_user_settings(cx, json);
++        let (rem_size, expected) = resolve(cx, ZeoRadius::Md);
++
++        let style = style_of(cx, |cx| ButtonLike::new("button").element(cx));
++        assert_every_corner(&format!("ButtonLike @ {label}"), &style, rem_size, expected);
++    }
++}
++
++/// The bug the coverage grep is blindest to, and the likeliest way to write this
++/// conversion wrong: reaching for the all-corner `.rounded()` because it is shorter.
++///
++/// `ButtonLike`'s per-corner form is load-bearing. It is what leaves the inner edges of
++/// a button group square, so the group reads as one control instead of two abutting
++/// ones. Rounding all four corners of `new_rounded_left` still leaves zero literals in
++/// the file, still puts every corner on `ZeoRadius::Md`, and still passes every other
++/// test here.
++#[gpui::test]
++fn a_button_rounds_only_the_corners_its_rounding_asks_for(cx: &mut TestAppContext) {
++    init_test(cx);
++    write_user_settings(cx, r#"{"ui_font_size": 16}"#);
++
++    let (rem_size, control_step) = resolve(cx, ZeoRadius::Md);
++
++    // Expected, in `CORNERS` order: top_left, top_right, bottom_right, bottom_left.
++    let cases = [
++        (
++            "ButtonLike::new",
++            style_of(cx, |cx| ButtonLike::new("all").element(cx)),
++            [true, true, true, true],
++        ),
++        (
++            "ButtonLike::new_rounded_left",
++            style_of(cx, |cx| ButtonLike::new_rounded_left("left").element(cx)),
++            [true, false, false, true],
++        ),
++        (
++            "ButtonLike::new_rounded_right",
++            style_of(cx, |cx| ButtonLike::new_rounded_right("right").element(cx)),
++            [false, true, true, false],
++        ),
++    ];
++
++    for (name, style, rounded_corners) in cases {
++        let radii = corner_radii(&style, rem_size);
++
++        for ((corner, radius), is_rounded) in CORNERS.iter().zip(radii).zip(rounded_corners) {
++            if is_rounded {
++                assert_eq!(
++                    radius,
++                    Some(control_step),
++                    "{name}: {corner} must carry the control step"
++                );
++            } else {
++                assert_eq!(
++                    radius, None,
++                    "{name}: {corner} must stay square — it is an inner edge of a button \
++                     group, and a group with rounded inner edges reads as two controls"
++                );
++            }
++        }
++    }
++}
++
++// --- Checkbox -----------------------------------------------------------------
++
++/// R2.7 by role, not by find-and-replace. The box lands on the badge step (`Sm`, 4px),
++/// which is a step *up* from the 2px it used to hard-code: design.md's role table reads
++/// "`Sm` — tags, badges, checkboxes" and reserves `Xs` for inline chips and scrollbar
++/// thumbs. Porting `.rounded_xs()` across as `ZeoRadius::Xs` would have been a clean
++/// grep and the wrong shape.
++#[gpui::test]
++fn a_checkbox_takes_the_badge_step(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for (label, json) in SETTINGS {
++        write_user_settings(cx, json);
++        let (rem_size, expected) = resolve(cx, ZeoRadius::Sm);
++
++        let style = style_of(cx, |cx| Checkbox::box_element(cx));
++        assert_every_corner(&format!("checkbox box @ {label}"), &style, rem_size, expected);
++    }
++
++    write_user_settings(cx, r#"{"ui_font_size": 16}"#);
++    let (rem_size, chip_step) = resolve(cx, ZeoRadius::Xs);
++    let style = style_of(cx, |cx| Checkbox::box_element(cx));
++
++    assert_ne!(
++        corner_radii(&style, rem_size)[0],
++        Some(chip_step),
++        "the checkbox box must NOT still be on the inline-chip step — carrying the old \
++         2px across as `ZeoRadius::Xs` is the find-and-replace this sub-task exists to \
++         not do"
++    );
++}
++
++/// A 4px dot is a circle or it is nothing. design.md's role table puts status dots on
++/// `Full`.
++#[gpui::test]
++fn a_checkbox_placeholder_dot_is_a_pill(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for (label, json) in SETTINGS {
++        write_user_settings(cx, json);
++        let (rem_size, expected) = resolve(cx, ZeoRadius::Full);
++
++        let style = style_of(cx, |cx| Checkbox::placeholder_dot(cx));
++        assert_every_corner(
++            &format!("checkbox placeholder dot @ {label}"),
++            &style,
++            rem_size,
++            expected,
++        );
++    }
++}
++
++// --- Switch -------------------------------------------------------------------
++
++/// R2.7. A switch is a pill at every level of its own nesting — the focus frame, the
++/// track and the thumb.
++///
++/// Running this across the whole settings matrix also pins D22: `Full` is a shape
++/// declaration rather than a measurement, so it must come out the same 9999px at
++/// `ui_font_size` 20 and at `radius_scale` 1.5 as it does at the nominal base. A `Full`
++/// that scaled would be a bigger meaningless number, not a rounder pill.
++#[gpui::test]
++fn a_switch_is_a_pill_at_every_level(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for (label, json) in SETTINGS {
++        write_user_settings(cx, json);
++        let (rem_size, expected) = resolve(cx, ZeoRadius::Full);
++
++        for (name, style) in [
++            ("frame", style_of(cx, |cx| Switch::frame("switch", cx))),
++            ("track", style_of(cx, |cx| Switch::track(cx))),
++            ("thumb", style_of(cx, |cx| Switch::thumb(cx))),
++        ] {
++            assert_every_corner(&format!("switch {name} @ {label}"), &style, rem_size, expected);
++        }
++    }
++}
++
++/// The trap, stated in both directions.
++///
++/// design.md's counter-rule and its role table pull opposite ways, and a conversion that
++/// applied either one uniformly would leave the file with zero literals and the wrong
++/// shapes throughout: every control a pill, or every pill a control.
++#[gpui::test]
++fn controls_hold_their_step_and_pills_hold_theirs(cx: &mut TestAppContext) {
++    init_test(cx);
++    write_user_settings(cx, r#"{"ui_font_size": 16}"#);
++
++    let (rem_size, control_step) = resolve(cx, ZeoRadius::Md);
++    let (_, pill) = resolve(cx, ZeoRadius::Full);
++
++    let button = style_of(cx, |cx| ButtonLike::new("button").element(cx));
++    for (corner, radius) in CORNERS.iter().zip(corner_radii(&button, rem_size)) {
++        assert_ne!(
++            radius,
++            Some(pill),
++            "ButtonLike {corner} must not be a pill — a 10px button in a code editor \
++             reads 'web app in a window', and 9999px is not a button at all"
++        );
++    }
++
++    let track = style_of(cx, |cx| Switch::track(cx));
++    for (corner, radius) in CORNERS.iter().zip(corner_radii(&track, rem_size)) {
++        assert_ne!(
++            radius,
++            Some(control_step),
++            "the switch track {corner} must not be on the control step — a switch rounded \
++             like a button is a rounded rectangle sliding inside a rounded rectangle"
++        );
++    }
++}
++
++// --- R1.2: the radius is the token's, not a literal's --------------------------
++
++/// R1.2, and the only assertion in this file that a re-introduced `.rounded_md()` cannot
++/// survive.
++///
++/// It has to be made through `zeo.radius_scale`, because `ui_font_size` cannot make it:
++/// gpui's `.rounded_md()` is `rems(0.375)` and Zed drives the window's rem size from
++/// `ui_font_size`, so the literal is already font-size-proportional and tracks the token
++/// to the pixel at every font size. `radius_scale` is the token's own knob and nothing
++/// in gpui honours it — so a control that moves with it is reading the token, and a
++/// control that does not still has a literal in it.
++///
++/// The switch is absent here on purpose: `ZeoRadius::Full` is exempt from both levers
++/// (D22) and resolves to the same flat 9999px `.rounded_full()` sets, so for a pill
++/// there is no observable difference for any test to catch.
++#[gpui::test]
++fn the_control_radius_comes_from_the_token_and_not_from_a_literal(cx: &mut TestAppContext) {
++    init_test(cx);
++    write_user_settings(cx, r#"{"ui_font_size": 16, "zeo": {"radius_scale": 1.5}}"#);
++
++    let (rem_size, control_step) = resolve(cx, ZeoRadius::Md);
++    let (_, badge_step) = resolve(cx, ZeoRadius::Sm);
++
++    // The only two bare pixel values this file names, and it names them to say what must
++    // NOT appear: 6 is what a surviving `.rounded_md()` would paint, 4 a surviving
++    // `.rounded_sm()`.
++    assert_px("ZeoRadius::Md @ radius_scale 1.5", control_step, 9.0);
++    assert_px("ZeoRadius::Sm @ radius_scale 1.5", badge_step, 6.0);
++
++    let button = style_of(cx, |cx| ButtonLike::new("button").element(cx));
++    assert_every_corner(
++        "ButtonLike @ radius_scale 1.5",
++        &button,
++        rem_size,
++        control_step,
++    );
++
++    let checkbox = style_of(cx, |cx| Checkbox::box_element(cx));
++    assert_every_corner(
++        "checkbox box @ radius_scale 1.5",
++        &checkbox,
++        rem_size,
++        badge_step,
++    );
++
++    // Belt and braces: name the literal's value outright, so the failure message says
++    // what happened rather than only that two numbers differ.
++    for (corner, radius) in CORNERS.iter().zip(corner_radii(&button, rem_size)) {
++        assert_ne!(
++            radius,
++            Some(px(6.)),
++            "ButtonLike {corner} is still 6px at radius_scale 1.5 — that is `.rounded_md()` \
++             surviving the conversion, not the Zeo token (R1.2)"
++        );
++    }
++}
+diff --git a/crates/ui/src/components/toggle.rs b/crates/ui/src/components/toggle.rs
+index edf90aca43..693715bba7 100644
+--- a/crates/ui/src/components/toggle.rs
++++ b/crates/ui/src/components/toggle.rs
+@@ -1,12 +1,12 @@
+ use gpui::{
+     AnyElement, AnyView, ClickEvent, ElementId, Hsla, IntoElement, KeybindingKeystroke, Keystroke,
+-    Role, Styled, Toggled, Window, div, hsla, prelude::*,
++    Role, Stateful, Styled, Toggled, Window, div, hsla, prelude::*,
+ };
+ use std::{rc::Rc, sync::Arc};
+ 
+ use crate::utils::is_light;
+ use crate::{Color, Icon, IconName, ToggleState, Tooltip};
+-use crate::{ElevationIndex, KeyBinding, prelude::*};
++use crate::{ElevationIndex, KeyBinding, ZeoRadius, prelude::*};
+ 
+ // TODO: Checkbox, CheckboxWithLabel, and Switch could all be
+ // restructured to use a ToggleLike, similar to Button/Buttonlike, Label/Labellike
+@@ -181,6 +181,39 @@ impl Checkbox {
+     pub fn container_size() -> Pixels {
+         px(20.0)
+     }
++
++    /// The box itself — the only part of a checkbox that carries a radius.
++    ///
++    /// It takes the badge step (`Sm`, 4px), which is a deliberate step *up* from the
++    /// 2px this box used to hard-code: design.md's role table reads "`Sm` — tags,
++    /// badges, checkboxes", and reserves 2px for inline chips and scrollbar thumbs.
++    /// This is the sub-task's own instruction — decide each site by role, never by
++    /// find-and-replace (R2.7).
++    ///
++    /// It is built here, at its concrete type, rather than inline in `render`, because
++    /// [`RenderOnce::render`] erases its return value to `impl IntoElement`: a style
++    /// applied inside it can never be read back, so the step that actually reaches the
++    /// box — the one thing the coverage grep cannot see — would be unassertable.
++    pub(crate) fn box_element(cx: &App) -> Div {
++        div()
++            .flex()
++            .flex_none()
++            .justify_center()
++            .items_center()
++            .m_1()
++            .size_4()
++            .rounded(ZeoRadius::Sm.px(cx))
++    }
++
++    /// The dot that stands in for the check on a placeholder checkbox. It is a status
++    /// dot, and design.md's role table puts those on `Full` — a 4px dot is a circle or
++    /// it is nothing. See [`Self::box_element`] for why this is a named builder.
++    pub(crate) fn placeholder_dot(cx: &App) -> Div {
++        div()
++            .flex_none()
++            .size(px(4.))
++            .rounded(ZeoRadius::Full.px(cx))
++    }
+ }
+ 
+ impl RenderOnce for Checkbox {
+@@ -222,14 +255,7 @@ impl RenderOnce for Checkbox {
+             .size(size)
+             .justify_center()
+             .child(
+-                div()
+-                    .flex()
+-                    .flex_none()
+-                    .justify_center()
+-                    .items_center()
+-                    .m_1()
+-                    .size_4()
+-                    .rounded_xs()
++                Self::box_element(cx)
+                     .bg(bg_color)
+                     .border_1()
+                     .border_color(border_color)
+@@ -241,13 +267,7 @@ impl RenderOnce for Checkbox {
+                         this.group_hover(group_id.clone(), |el| el.border_color(hover_border_color))
+                     })
+                     .when(self.placeholder, |this| {
+-                        this.child(
+-                            div()
+-                                .flex_none()
+-                                .rounded_full()
+-                                .bg(color.color(cx).alpha(0.5))
+-                                .size(px(4.)),
+-                        )
++                        this.child(Self::placeholder_dot(cx).bg(color.color(cx).alpha(0.5)))
+                     })
+                     .children(icon),
+             );
+@@ -431,6 +451,45 @@ impl Switch {
+         self.aria_label = Some(label.into());
+         self
+     }
++
++    /// The frame that carries the focus ring: a transparent 2px border that only
++    /// becomes visible on focus, so it has to hug the pill rather than box it in.
++    ///
++    /// A switch is a pill at every level of its own nesting — this frame, the track it
++    /// wraps, and the thumb inside that. design.md's role table puts toggles on
++    /// `Full`, and `Full` is a shape declaration rather than a measurement (D22), so
++    /// all three take the same step and none of them scales with it. The counter-rule
++    /// that holds buttons down at 6px does not reach here: a switch rounded to the
++    /// control step is a rounded rectangle inside a rounded rectangle, which is not a
++    /// switch at all.
++    ///
++    /// The three shapes are named builders rather than inline chains because
++    /// [`RenderOnce::render`] erases its return value to `impl IntoElement`: a style
++    /// applied inside it can never be read back, so the step that actually reaches a
++    /// switch — the one thing the coverage grep cannot see, and the one thing an
++    /// over-eager conversion to `Md` would silently get wrong — would be unassertable.
++    pub(crate) fn frame(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
++        div()
++            .id(id)
++            .p(px(1.0))
++            .border_2()
++            .rounded(ZeoRadius::Full.px(cx))
++    }
++
++    /// The pill the thumb slides along. See [`Self::frame`].
++    pub(crate) fn track(cx: &App) -> Div {
++        h_flex()
++            .size_full()
++            .px(DynamicSpacing::Base02.px(cx))
++            .rounded(ZeoRadius::Full.px(cx))
++    }
++
++    /// The knob. See [`Self::frame`].
++    pub(crate) fn thumb(cx: &App) -> Div {
++        div()
++            .size(DynamicSpacing::Base12.rems(cx))
++            .rounded(ZeoRadius::Full.px(cx))
++    }
+ }
+ 
+ impl RenderOnce for Switch {
+@@ -458,8 +517,7 @@ impl RenderOnce for Switch {
+         let label = self.label;
+         let aria_label = self.aria_label.or_else(|| label.clone());
+ 
+-        let switch = div()
+-            .id((self.id.clone(), "switch"))
++        let switch = Self::frame((self.id.clone(), "switch"), cx)
+             .role(Role::Switch)
+             .when_some(aria_label, |this, label| this.aria_label(label))
+             .aria_toggled(match self.toggle_state {
+@@ -467,10 +525,7 @@ impl RenderOnce for Switch {
+                 ToggleState::Indeterminate => Toggled::Mixed,
+                 ToggleState::Unselected => Toggled::False,
+             })
+-            .p(px(1.0))
+-            .border_2()
+             .border_color(cx.theme().colors().border_transparent)
+-            .rounded_full()
+             .when_some(
+                 self.tab_index.filter(|_| !self.disabled),
+                 |this, tab_index| {
+@@ -492,25 +547,16 @@ impl RenderOnce for Switch {
+                     .h(DynamicSpacing::Base20.rems(cx))
+                     .group(group_id.clone())
+                     .child(
+-                        h_flex()
++                        Self::track(cx)
+                             .when(is_on, |on| on.justify_end())
+                             .when(!is_on, |off| off.justify_start())
+-                            .size_full()
+-                            .rounded_full()
+-                            .px(DynamicSpacing::Base02.px(cx))
+                             .bg(bg_color)
+                             .when(!self.disabled, |this| {
+                                 this.group_hover(group_id.clone(), |el| el.bg(bg_hover_color))
+                             })
+                             .border_1()
+                             .border_color(border_color)
+-                            .child(
+-                                div()
+-                                    .size(DynamicSpacing::Base12.rems(cx))
+-                                    .rounded_full()
+-                                    .bg(thumb_color)
+-                                    .opacity(thumb_opacity),
+-                            ),
++                            .child(Self::thumb(cx).bg(thumb_color).opacity(thumb_opacity)),
+                     ),
+             );
+ 
+-- 
+2.55.0
+

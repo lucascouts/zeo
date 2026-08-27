@@ -1,0 +1,29 @@
+red-evidence:
+  - task: "6.1"
+    test_file: ".draft/authored-tests/tests/sync-upstream.test.sh"
+    target_path: "tests/sync-upstream.test.sh"
+    command: "bash .epic/stories/001-zeo-fork-foundation/.draft/authored-tests/tests/sync-upstream.test.sh"
+    failed: true
+    reason: "FAIL sync script exists at scripts/sync-upstream.sh (not found) — code under test does not exist yet; exit 1"
+    recorded: 2026-07-10
+
+  - task: "7.1"
+    test_file: "tests/sync-upstream.test.sh"
+    target_path: "tests/sync-upstream.test.sh"
+    command: "bash tests/sync-upstream.test.sh"
+    failed: true
+    reason: >-
+      Scenario s4 (nothing to rebase) authored Red before touching the script.
+      27 checks, 2 failures:
+        FAIL s4: the script's own OK line reports that the branch is already up to date
+             (got: "OK: zeo rebased onto upstream/main and gated green;
+              last-good recorded as 11b0179aba91")
+        FAIL s4: does NOT claim a rebase that never happened (found 'rebased onto')
+      The failure output IS the defect: with `--to` already an ancestor of zeo,
+      `git rebase` is a silent no-op exiting 0, so the script ran its gate and
+      declared a successful rebase having replayed nothing. exit 1.
+      Note: the s4 assertion deliberately greps the script's OWN `^OK:` summary
+      line — `git rebase` itself prints "Current branch zeo is up to date", so a
+      whole-log grep would have passed incidentally without the script
+      understanding anything.
+    recorded: 2026-07-11

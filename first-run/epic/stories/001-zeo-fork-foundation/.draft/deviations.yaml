@@ -1,0 +1,127 @@
+deviations:
+  - id: "D-001"
+    task: "4.2"
+    component: "remote_server auto-download override env var (R3.6)"
+    design: "error message references ZED_REMOTE_SERVER_PATH"
+    actual: "error message references ZED_COPY_REMOTE_SERVER"
+    reason: >-
+      ZED_REMOTE_SERVER_PATH does not exist in this Zed snapshot
+      (5f8a7413). The real prebuilt-binary override is ZED_COPY_REMOTE_SERVER
+      (crates/remote/src/transport.rs:252); ZED_BUILD_REMOTE_SERVER is the
+      build-from-source toggle.
+    impact: >-
+      Users overriding the remote-server binary use ZED_COPY_REMOTE_SERVER.
+      R3.6 intent preserved: no zed.dev artifact fetch for the zeo channel and
+      a documented override is cited.
+    verified: >-
+      Audit 2026-07-11: confirmed. `grep -rn ZED_REMOTE_SERVER_PATH` over the
+      fork returns zero hits; ZED_COPY_REMOTE_SERVER is at transport.rs:252.
+      Impact "limited" holds — both entry points (download_remote_server_release,
+      get_remote_server_release_url) are guarded before any network call, and all
+      four callers in remote_connection.rs go through them. Story R3.6's text is
+      what is wrong, not the implementation.
+
+  - id: "D-002"
+    task: "3.1"
+    component: "Cargo.lock / Cargo.toml (design.md Security: 'no new dependencies; --frozen against upstream Cargo.lock')"
+    design: "workspace lockfile stays byte-identical to upstream"
+    actual: >-
+      Cargo.lock +25 lines, Cargo.toml +2 lines across 5f8a7413a3..zeo
+    reason: >-
+      Overlay patch 0002 (commit 8b8eda6fc8) introduces the LOCAL path crate
+      `crates/claude_code_ide`. A new workspace member cannot be absent from the
+      lockfile and still build with --frozen, so the lockfile HAD to change.
+    impact: >-
+      None on supply chain. The diff adds exactly one [[package]] stanza —
+      claude_code_ide 0.1.0, with no `source =` line (not from crates.io). Its 17
+      dependencies were all already present in the base lockfile; zero third-party
+      crates added, zero checksums changed.
+    verified: >-
+      Audit 2026-07-11: `git diff --stat 5f8a7413a3..zeo -- Cargo.lock Cargo.toml`
+      and a per-hunk read. Registered because a future auditor diffing the lockfile
+      will hit the same alarm and needs this to read. design.md's literal wording is
+      now false as stated; the substance of the constraint holds.
+
+  - id: "D-003"
+    task: "5.2"
+    component: "fork commit afcf2eb103 — 'claude_code_ide: make the imported patch clippy-clean'"
+    design: "the rebrand is exactly 5 fork commits on top of the 7 patch commits (12 total)"
+    actual: "a 6th fork commit exists above the rebrand block (stack is 14, not 12)"
+    reason: >-
+      The claude_code_ide crate arrives from overlay patch 0002. The ebuild never
+      lints it, but the workspace [lints] deny-set fails it — so Quality Gate
+      "clippy clean under -D warnings" is unreachable without this fix. No behaviour
+      change: drops a redundant servers.clone(), adds a justified
+      #[allow(clippy::result_large_err)], unwinds an artificial .map() in a test mock.
+    impact: >-
+      None functional. Required work that the plan did not anticipate. Registered as
+      a deviation rather than left implicit in the commit log.
+
+  - id: "D-004"
+    task: "4.4"
+    component: "CLI binary name (design §4.4 / D9 / R3.7 — 'CLI user-facing zeo')"
+    design: "the CLI cargo bin is named zeo"
+    actual: "crates/cli/Cargo.toml keeps [[bin]] name = \"cli\""
+    reason: >-
+      A second cargo bin named `zeo` would collide with the app binary in target/.
+      Upstream has the same shape (cargo bin `cli`, installed as the `zed` command);
+      Zeo replicates it — the `zeo` COMMAND is created at packaging time (story 007).
+      Rationale documented in docs/REBRAND.md:59-61.
+    impact: >-
+      R3.7's no-PATH-collision half is fully met (smoke item 5: Zeo ships `zeo`;
+      Zed ships `zedit` + /usr/libexec/zed-editor — disjoint). The `zeo` CLI command
+      itself is deferred to story 007, as is the residual clap `name = "zed"` in
+      cli/src/main.rs:51 and the Flatpak `bin/zed` discovery path at :1060.
+
+  - id: "D-005"
+    task: "4.x"
+    component: "fork commit f7218425ad — 'zed: announce Zeo in the startup log'"
+    design: "shallow rebrand (D1) — touch only the user-visible layer, minimize rebase surface"
+    actual: >-
+      one line changed in crates/zed/src/main.rs:331 ('starting zed version' ->
+      'starting zeo version'), a hot upstream file the rebrand otherwise never touches
+    reason: >-
+      Cosmetic. Required by NO requirement — R3.1 covers the window title/about and
+      version output, both already satisfied by the release_channel commit (6c555074aa).
+    impact: >-
+      Adds rebase surface in a hot upstream file for zero user-visible gain — the exact
+      cost D1 exists to avoid. ACCEPTED FOR NOW rather than dropped: this commit is the
+      HEAD the 2.3 GB release artifact was built from (1.12.0+zeo.f7218425ad), so
+      dropping it would invalidate the artifact's provenance and the smoke evidence,
+      forcing a 30-90 min rebuild to remove one line. Revisit at the next real sync,
+      when a rebuild happens anyway.
+    followup: >-
+      smoke-001.md item 1 originally cited this log line as evidence for R3.1 — the
+      commit was manufacturing its own acceptance evidence. Corrected 2026-07-11: the
+      About-dialog string carries R3.1 on its own; the log line is now listed as
+      corroboration only.
+
+discoveries:
+  - task: "3.2"
+    tech: "cargo/Zed"
+    finding: "host has a warm Zed build cache; full `cargo check` ~1m43s, incremental ~12-40s"
+  - task: "4.2"
+    tech: "auto_update tests"
+    finding: >-
+      `cargo test -p auto_update` has a PRE-EXISTING failure
+      `tests::test_auto_update_downloads` ("database not initialized",
+      db.rs:88) unrelated to Zeo changes — flag for 5.2 so it is not counted a
+      regression.
+  - task: "validate"
+    tech: "shellcheck"
+    finding: >-
+      shellcheck IS installed on this host (/usr/bin/shellcheck 0.11.0). The
+      "absent on this host" note in 6.1 was stale; the first actual run of
+      `shellcheck scripts/sync-upstream.sh` is clean (exit 0, zero findings).
+  - task: "validate"
+    tech: "paths crate"
+    finding: >-
+      `cargo test -p paths` is a VACUOUS pass — the crate has zero #[test]
+      functions. R3.3/R3.4 rest on the grep (single APP_NAME chokepoint) and the
+      smoke checksum, not on that test. Note it before trusting the command again.
+  - task: "validate"
+    tech: "zeo binary"
+    finding: >-
+      the `zeo` binary does NOT accept `--version` (exit 2). Identity must be probed
+      via `--system-specs` → "Zed: v1.12.0+zeo.<sha> (Zeo)". Any future validation
+      script assuming `--version` will fail spuriously.

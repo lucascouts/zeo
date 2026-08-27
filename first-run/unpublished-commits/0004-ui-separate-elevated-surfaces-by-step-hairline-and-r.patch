@@ -1,0 +1,746 @@
+From 47ef3f50373b06639832232e4ad0fd19c3a72c52 Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sat, 11 Jul 2026 23:56:16 -0300
+Subject: [PATCH 4/9] ui: separate elevated surfaces by step, hairline and rim
+ light
+
+Zed's elevated surface gets no background step at all -- elevated_surface and
+surface are byte-identical in One -- leaving a black drop shadow as the only
+depth cue, which a dark canvas swallows. That is the mechanical cause of the
+flat look. Depth is now carried by a background step and a 1px hairline first,
+with a shadow only for e2/e3, plus an inset rim on the top edge: on a dark
+background the rim light is what actually sells elevation.
+
+The chokepoint is the real fix. elevated() and elevated_borderless() hard-coded
+elevated_surface_background and used the ElevationIndex only for the shadow, so
+elevation_1/2/3 all painted the same colour and ElevationIndex::bg() was dead
+code. Fixing the palette would have changed nothing while the helper never asked
+the enum which step it was on. They now call index.bg(cx) and take their radius
+from the Zeo token.
+
+Surface and EditorSurface still return no drop shadow -- that is upstream's
+deliberate design, and the fix for flatness is the step and the rim, not a shadow
+there. The e2/e3 stacks are Zed's own values (peak alpha 12%), kept as-is.
+
+bg() is widened from &mut App to &App: elevated() holds only &App and its
+signature is frozen by 71 call sites. bg() only reads theme colours, and every
+sibling accessor already takes &App.
+
+Re-skins pickers, the command palette, popovers, modals, context menus and
+toasts across 71 call sites in 47 files, with zero call sites modified.
+
+Covers R2.2, R2.4, R2.5, R2.6, R1.2.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ crates/ui/src/styles.rs                 |   3 +
+ crates/ui/src/styles/elevation.rs       |  58 ++-
+ crates/ui/src/styles/elevation_tests.rs | 503 ++++++++++++++++++++++++
+ crates/ui/src/traits/styled_ext.rs      |  55 ++-
+ 4 files changed, 603 insertions(+), 16 deletions(-)
+ create mode 100644 crates/ui/src/styles/elevation_tests.rs
+
+diff --git a/crates/ui/src/styles.rs b/crates/ui/src/styles.rs
+index e05f8bc4a5..b5beb96574 100644
+--- a/crates/ui/src/styles.rs
++++ b/crates/ui/src/styles.rs
+@@ -19,5 +19,8 @@ pub use spacing::*;
+ pub use typography::*;
+ pub use units::*;
+ 
++#[cfg(test)]
++mod elevation_tests;
++
+ #[cfg(test)]
+ mod radius_tests;
+diff --git a/crates/ui/src/styles/elevation.rs b/crates/ui/src/styles/elevation.rs
+index 3f2e3b7683..955d30b700 100644
+--- a/crates/ui/src/styles/elevation.rs
++++ b/crates/ui/src/styles/elevation.rs
+@@ -3,13 +3,34 @@ use std::fmt::{self, Display, Formatter};
+ use gpui::{App, BoxShadow, Hsla, hsla, px};
+ use theme::{ActiveTheme, Appearance};
+ 
+-/// Today, elevation is primarily used to add shadows to elements, and set the correct background for elements like buttons.
+-///
+ /// Elevation can be thought of as the physical closeness of an element to the
+ /// user. Elements with lower elevations are physically further away on the
+ /// z-axis and appear to be underneath elements with higher elevations.
+ ///
+-/// In the future, a more complete approach to elevation may be added.
++/// Levels are separated by a **background step and a hairline border first**, and
++/// only then by a shadow: depth lives at a 1px scale, not in a large soft wash.
++///
++/// | Level | Variants                          | Border   | Shadow | Rim  |
++/// |-------|-----------------------------------|----------|--------|------|
++/// | `e0`  | [`Background`], [`EditorSurface`]  | none     | none   | none |
++/// | `e1`  | [`Surface`]                       | hairline | none   | none |
++/// | `e2`  | [`ElevatedSurface`]               | hairline | yes    | yes  |
++/// | `e3`  | [`ModalSurface`]                  | yes      | yes    | yes  |
++///
++/// Only `e2` and `e3` actually float, so they are the only levels that carry a
++/// drop shadow — and each also carries an inset rim of light on its top edge (see
++/// [`ElevationIndex::rim`]). On a dark canvas a black drop shadow is nearly
++/// invisible, so it is the rim, not the shadow, that sells the elevation.
++///
++/// The empty shadow stack on the grounded levels is deliberate, not an oversight:
++/// their separation comes from the background step and the hairline. Adding a
++/// shadow there produces exactly the flat, muddy look this model exists to avoid.
++///
++/// [`Background`]: ElevationIndex::Background
++/// [`EditorSurface`]: ElevationIndex::EditorSurface
++/// [`Surface`]: ElevationIndex::Surface
++/// [`ElevatedSurface`]: ElevationIndex::ElevatedSurface
++/// [`ModalSurface`]: ElevationIndex::ModalSurface
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum ElevationIndex {
+     /// On the layer of the app background. This is under panels, panes, and
+@@ -80,14 +101,41 @@ impl ElevationIndex {
+         }
+     }
+ 
++    /// Returns the inset rim of light for the levels that float, and `None` for the
++    /// levels that do not.
++    ///
++    /// A raised surface catches the light on its top edge. That highlight is what
++    /// actually reads as elevation on a dark canvas, which swallows a black drop
++    /// shadow almost entirely — so `e2` and `e3` are rimmed as well as shadowed,
++    /// and the rim carries the greater part of the effect.
++    ///
++    /// GPUI cannot colour a single border side, so the rim is expressed as an inset
++    /// [`BoxShadow`]: a 1px, zero-blur, top-edge highlight painted inside the
++    /// element's bounds. Blurring it would turn a rim into a glow.
++    ///
++    /// The rim is the same white in both appearances. Taking its colour from the
++    /// theme would invert it on a light theme — a shade, not a highlight — and a
++    /// rim that is not lighter than the surface it sits on is not a rim.
++    pub fn rim(self, _cx: &App) -> Option<BoxShadow> {
++        let alpha = match self {
++            ElevationIndex::ElevatedSurface => 0.05,
++            ElevationIndex::ModalSurface => 0.06,
++            ElevationIndex::Background
++            | ElevationIndex::Surface
++            | ElevationIndex::EditorSurface => return None,
++        };
++
++        Some(BoxShadow::new(px(0.), px(1.), hsla(0., 0., 1., alpha)).inset())
++    }
++
+     /// Returns the background color for the given elevation index.
+-    pub fn bg(&self, cx: &mut App) -> Hsla {
++    pub fn bg(&self, cx: &App) -> Hsla {
+         match self {
+             ElevationIndex::Background => cx.theme().colors().background,
+             ElevationIndex::Surface => cx.theme().colors().surface_background,
+             ElevationIndex::EditorSurface => cx.theme().colors().editor_background,
+             ElevationIndex::ElevatedSurface => cx.theme().colors().elevated_surface_background,
+-            ElevationIndex::ModalSurface => cx.theme().colors().elevated_surface_background,
++            ElevationIndex::ModalSurface => cx.theme().colors().modal_surface_background,
+         }
+     }
+ 
+diff --git a/crates/ui/src/styles/elevation_tests.rs b/crates/ui/src/styles/elevation_tests.rs
+new file mode 100644
+index 0000000000..6e3d57fc76
+--- /dev/null
++++ b/crates/ui/src/styles/elevation_tests.rs
+@@ -0,0 +1,503 @@
++//! Unit tests for the Zeo elevation model (sub-task 3.1) AND for the chokepoint
++//! that applies it (sub-task 3.2) — R2.1 (mechanism half), R2.2, R2.3, R2.4, R1.2.
++//!
++//! ## Materialisation (executor — do this BEFORE touching `elevation.rs`)
++//!
++//! 1. Copy this file to `fork/crates/ui/src/styles/elevation_tests.rs`.
++//! 2. Register it in `fork/crates/ui/src/styles.rs`, next to `mod elevation;`:
++//!
++//!        #[cfg(test)]
++//!        mod elevation_tests;
++//!
++//! 3. Dev-dependencies: the same two `radius_tests.rs` needs
++//!    (`settings` with `test-support`, and `theme_settings`).
++//! 4. Run: `cd fork && cargo test -p ui elevation`
++//!    (`cd fork` is mandatory — see `docs/BUILD.md:26-31`.)
++//!
++//! ## Expected Red (confirm this BEFORE implementing — do not skip)
++//!
++//! Compile errors, not assertion failures:
++//!
++//!     error[E0599]: no method named `rim` found for enum `ElevationIndex`
++//!     error[E0432]: unresolved import `crate::ZeoRadius`
++//!
++//! Both are the right failure: `ElevationIndex::rim()` (3.1) and the radius token
++//! (2.2) do not exist yet. An error naming `StyleRefinement`, `div` or
++//! `StyledExt` instead means the test is broken — fix the test.
++//!
++//! Note that `peak_shadow_alpha_stays_at_or_below_12_percent` will pass on the
++//! *current* code the moment it compiles: Zed's existing stacks are already at
++//! 12% (`elevation.rs:49-77`). It is a REGRESSION guard, not a Red driver — its
++//! job is to fail the day someone reaches for `.shadow_lg()` (a verbatim Tailwind
++//! port at 10-25% alpha, `gpui_macros/src/styles.rs:390-488`). Do not "strengthen"
++//! it into something that fails today.
++//!
++//! ## What this file deliberately does NOT assert
++//!
++//! **The background luminance step (R2.1's data half) is NOT asserted here, and
++//! CANNOT be.** `ElevationIndex::bg()` returns `elevated_surface_background`
++//! straight from the *active theme* (`elevation.rs:89-90`), and a `ui` unit test
++//! runs against the base theme — One Dark — where `elevated_surface ==
++//! surface` **by data** (`one.json:16-17`). That is the very defect story 002
++//! fixes, and it is fixed in the theme JSON, so it is asserted in sub-task 5.1
++//! (`crates/theme_settings/tests/zeo_theme.rs`). This side tests the *mechanism*;
++//! the theme side tests the *values*. Do not try to be clever here — a unit test
++//! that asserts a step against One Dark can only pass by faking the theme, which
++//! would assert nothing about what ships.
++
++use gpui::{
++    AbsoluteLength, App, BoxShadow, Fill, Pixels, StyleRefinement, Styled, TestAppContext,
++    UpdateGlobal, div, hsla, px,
++};
++use settings::{ParseStatus, SettingsStore};
++use theme::{ActiveTheme, Appearance, GlobalTheme};
++
++use crate::{ElevationIndex, StyledExt, ZeoRadius};
++
++/// Zed's own peak (`elevation.rs:49-77`), and the ceiling design.md principle 2
++/// draws from the reference set: Linear 6-9%, VS Code 8-15%, Tailwind 10-25%.
++const MAX_SHADOW_ALPHA: f32 = 0.12;
++
++const ALL_INDICES: [ElevationIndex; 5] = [
++    ElevationIndex::Background,
++    ElevationIndex::Surface,
++    ElevationIndex::EditorSurface,
++    ElevationIndex::ElevatedSurface,
++    ElevationIndex::ModalSurface,
++];
++
++/// e2 and e3 — the only levels that float, and so the only levels that carry a
++/// shadow and a rim (design.md §Elevation).
++const FLOATING_INDICES: [ElevationIndex; 2] =
++    [ElevationIndex::ElevatedSurface, ElevationIndex::ModalSurface];
++
++/// e0 and e1 — separated by background step and hairline alone.
++const GROUNDED_INDICES: [ElevationIndex; 3] = [
++    ElevationIndex::Background,
++    ElevationIndex::Surface,
++    ElevationIndex::EditorSurface,
++];
++
++fn init_test(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let settings_store = SettingsStore::test(cx);
++        cx.set_global(settings_store);
++        theme_settings::init(theme::LoadThemes::JustBase, cx);
++    });
++}
++
++fn write_user_settings(cx: &mut TestAppContext, json: &str) {
++    cx.update(|cx| {
++        SettingsStore::update_global(cx, |store, cx| {
++            let result = store.set_user_settings(json, cx);
++            assert!(
++                !matches!(result.parse_status, ParseStatus::Failed { .. }),
++                "settings must accept: {json}\n{result:?}"
++            );
++        });
++    });
++}
++
++/// The base registry (`LoadThemes::JustBase`) carries a dark theme only, so the
++/// light appearance is produced by flipping the active theme's `appearance`. Only
++/// `Theme::appearance` is read by `shadow()`/`rim()`, so this is sufficient — and
++/// it is honest about the limit: it exercises the *mechanism*, never the palette.
++fn set_appearance(cx: &mut TestAppContext, appearance: Appearance) {
++    cx.update(|cx: &mut App| {
++        let mut theme = (**cx.theme()).clone();
++        theme.appearance = appearance;
++        GlobalTheme::update_theme(cx, std::sync::Arc::new(theme));
++    });
++}
++
++fn style_of(cx: &mut TestAppContext, build: impl FnOnce(&mut App) -> gpui::Div) -> StyleRefinement {
++    cx.update(|cx: &mut App| {
++        let mut element = build(cx);
++        element.style().clone()
++    })
++}
++
++fn corner_radius(style: &StyleRefinement, rem_size: Pixels) -> Pixels {
++    let Some(radius) = style.corner_radii.top_left else {
++        panic!("the element sets no corner radius at all");
++    };
++    match radius {
++        AbsoluteLength::Pixels(pixels) => pixels,
++        AbsoluteLength::Rems(rems) => rems.to_pixels(rem_size),
++    }
++}
++
++fn inset_shadows(style: &StyleRefinement) -> Vec<BoxShadow> {
++    style
++        .box_shadow
++        .clone()
++        .unwrap_or_default()
++        .into_iter()
++        .filter(|shadow| shadow.inset)
++        .collect()
++}
++
++fn background_of(style: &StyleRefinement) -> Fill {
++    let Some(background) = style.background.clone() else {
++        panic!("the elevated surface sets no background at all");
++    };
++    background
++}
++
++// --- 3.1: the elevation model ------------------------------------------------
++
++#[gpui::test]
++fn every_index_resolves_in_both_appearances(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for appearance in [Appearance::Dark, Appearance::Light] {
++        set_appearance(cx, appearance);
++
++        for index in ALL_INDICES {
++            cx.update(|cx: &mut App| {
++                let _ = index.shadow(cx);
++                let _ = index.rim(cx);
++                let _ = index.bg(cx);
++                let _ = index.on_elevation_bg(cx);
++                let _ = index.darker_bg(cx);
++            });
++        }
++    }
++}
++
++/// R2.3. A regression guard, deliberately: Zed's stacks already satisfy it. It
++/// fails the day someone swaps in GPUI's `.shadow_sm/md/lg/xl()` — a verbatim
++/// Tailwind port at 10-25% alpha, and exactly the dated baseline this story exists
++/// to leave behind.
++#[gpui::test]
++fn peak_shadow_alpha_stays_at_or_below_12_percent(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for appearance in [Appearance::Dark, Appearance::Light] {
++        set_appearance(cx, appearance);
++
++        for index in ALL_INDICES {
++            let shadows = cx.update(|cx: &mut App| index.shadow(cx));
++            for shadow in shadows {
++                assert!(
++                    shadow.color.a <= MAX_SHADOW_ALPHA + f32::EPSILON,
++                    "{index} in {appearance:?}: shadow alpha {} exceeds the {MAX_SHADOW_ALPHA} \
++                     ceiling (R2.3 — never reach for GPUI's Tailwind-ported shadow helpers)",
++                    shadow.color.a
++                );
++            }
++        }
++    }
++}
++
++/// R2.2. On a dark canvas a black drop shadow is nearly invisible — the rim light
++/// is what actually sells elevation (design.md principle 11). GPUI cannot do
++/// per-side border colours, but `BoxShadow.inset` exists
++/// (`crates/gpui/src/style.rs:355`), which is what makes the rim possible at all.
++#[gpui::test]
++fn floating_levels_carry_an_inset_rim_and_grounded_levels_do_not(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for appearance in [Appearance::Dark, Appearance::Light] {
++        set_appearance(cx, appearance);
++
++        for index in FLOATING_INDICES {
++            let rim = cx.update(|cx: &mut App| index.rim(cx));
++            let Some(rim) = rim else {
++                panic!("{index} in {appearance:?} must carry an inset rim (R2.2)");
++            };
++
++            assert!(rim.inset, "{index}: the rim must be an INSET shadow, not a drop");
++            assert!(
++                f32::from(rim.offset.y) > 0.,
++                "{index}: the rim sits on the TOP edge (positive y offset), got {:?}",
++                rim.offset.y
++            );
++            assert_eq!(
++                rim.blur_radius,
++                px(0.),
++                "{index}: the rim is a hairline of light — a blurred rim is a glow"
++            );
++            assert!(
++                rim.color.a > 0. && rim.color.a <= MAX_SHADOW_ALPHA,
++                "{index}: the rim's alpha ({}) must be visible but never above {MAX_SHADOW_ALPHA}",
++                rim.color.a
++            );
++            assert!(
++                rim.color.l > 0.5,
++                "{index}: the rim is a highlight (light), not a shade — got lightness {}",
++                rim.color.l
++            );
++        }
++
++        for index in GROUNDED_INDICES {
++            let rim = cx.update(|cx: &mut App| index.rim(cx));
++            assert!(
++                rim.is_none(),
++                "{index} does not float, so it carries no rim (design.md §Elevation)"
++            );
++        }
++    }
++}
++
++/// The `vec![]` at `elevation.rs:46-47` is deliberate upstream design, not an
++/// oversight. The fix for flatness is the background step and the rim — never a
++/// shadow here.
++#[gpui::test]
++fn grounded_levels_still_carry_no_drop_shadow(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for appearance in [Appearance::Dark, Appearance::Light] {
++        set_appearance(cx, appearance);
++
++        for index in [ElevationIndex::Surface, ElevationIndex::EditorSurface] {
++            let shadows = cx.update(|cx: &mut App| index.shadow(cx));
++            assert!(
++                shadows.is_empty(),
++                "{index} must keep its empty shadow stack — separation comes from the \
++                 background step and the hairline, not from a drop shadow (R2.1)"
++            );
++        }
++    }
++}
++
++// --- 3.2: the chokepoint (`traits/styled_ext.rs`) ----------------------------
++//
++// This is the function that re-skins 55 call sites across 45 files without any of
++// them being touched. The first draft of the plan claimed it was "covered by 3.1
++// + the grep": it was not. 3.1 exercises the ElevationIndex *enum*; the grep
++// proves only the *absence* of literals. Neither asserts that `elevated()` applies
++// anything at all. R2.1's mechanism half and R2.2 live or die here.
++
++#[gpui::test]
++fn elevated_applies_a_hairline_border(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let style = style_of(cx, |cx| div().elevation_2(cx));
++
++    assert_eq!(
++        style.border_widths.top,
++        Some(AbsoluteLength::Pixels(px(1.))),
++        "an elevated surface is separated by a 1px hairline first, and only then by a \
++         shadow (R2.1) — a shadow-only surface is the flat look this story removes"
++    );
++    assert!(
++        style.border_color.is_some(),
++        "the hairline needs a colour, or it is not a hairline"
++    );
++    assert!(
++        style.background.is_some(),
++        "the elevated surface sets its own background — the luminance step is the other \
++         half of R2.1 (its VALUE is asserted in 5.1, against the Zeo theme)"
++    );
++}
++
++#[gpui::test]
++fn elevated_borderless_applies_no_border(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let style = style_of(cx, |cx| div().elevation_2_borderless(cx));
++
++    assert_eq!(
++        style.border_widths.top, None,
++        "elevation_2_borderless must stay borderless — its signature and its contract \
++         are unchanged by this story"
++    );
++}
++
++/// R1.2 + R2.4: the radius comes from the Zeo token, not from `.rounded_lg()`.
++/// Asserting the *value* alone would not prove that: `.rounded_lg()` is 8px and so
++/// is `ZeoRadius::Lg` at the default `ui_font_size`. The proof is that the radius
++/// MOVES with `ui_font_size` — only a token-sourced radius does.
++#[gpui::test]
++fn elevated_takes_its_radius_from_the_zeo_token(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for font_size in ["16", "20"] {
++        write_user_settings(cx, &format!(r#"{{"ui_font_size": {font_size}}}"#));
++
++        let rem_size = cx.update(|cx: &mut App| theme::theme_settings(cx).ui_font_size(cx));
++
++        // Panels and popovers step up to `lg` (8); modals and the command palette to
++        // `xl` (12) — design.md §Radius, "promoting containers up a step".
++        let expectations = [
++            ("elevation_1", style_of(cx, |cx| div().elevation_1(cx)), ZeoRadius::Lg),
++            ("elevation_2", style_of(cx, |cx| div().elevation_2(cx)), ZeoRadius::Lg),
++            ("elevation_3", style_of(cx, |cx| div().elevation_3(cx)), ZeoRadius::Xl),
++            (
++                "elevation_2_borderless",
++                style_of(cx, |cx| div().elevation_2_borderless(cx)),
++                ZeoRadius::Lg,
++            ),
++        ];
++
++        for (name, style, expected) in expectations {
++            let expected = cx.update(|cx: &mut App| expected.px(cx));
++            assert_eq!(
++                corner_radius(&style, rem_size),
++                expected,
++                "{name} @ ui_font_size {font_size}: the corner radius must come from the \
++                 Zeo token (R1.2). A literal `.rounded_lg()` passes at 16 and fails here."
++            );
++        }
++    }
++
++    // Belt and braces: the 8px literal and the token coincide at the default font
++    // size, so state the divergence explicitly.
++    write_user_settings(cx, r#"{"ui_font_size": 20}"#);
++    let rem_size = cx.update(|cx: &mut App| theme::theme_settings(cx).ui_font_size(cx));
++    let style = style_of(cx, |cx| div().elevation_2(cx));
++    assert_ne!(
++        corner_radius(&style, rem_size),
++        px(8.),
++        "at ui_font_size 20 an elevated surface must NOT still be rounded 8px — that is \
++         `.rounded_lg()` surviving in the chokepoint"
++    );
++}
++
++/// R2.2 at the place it actually reaches a pixel: the rim must be applied by the
++/// helper, not merely be available on the enum.
++#[gpui::test]
++fn elevated_applies_the_rim_to_floating_levels_only(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    for appearance in [Appearance::Dark, Appearance::Light] {
++        set_appearance(cx, appearance);
++
++        for (name, style) in [
++            ("elevation_2", style_of(cx, |cx| div().elevation_2(cx))),
++            ("elevation_3", style_of(cx, |cx| div().elevation_3(cx))),
++            (
++                "elevation_2_borderless",
++                style_of(cx, |cx| div().elevation_2_borderless(cx)),
++            ),
++        ] {
++            let rims = inset_shadows(&style);
++            assert_eq!(
++                rims.len(),
++                1,
++                "{name} in {appearance:?}: exactly one inset rim must reach the element \
++                 (R2.2) — the enum having a rim() means nothing if the chokepoint drops it"
++            );
++        }
++
++        let style = style_of(cx, |cx| div().elevation_1(cx));
++        assert!(
++            inset_shadows(&style).is_empty(),
++            "elevation_1 in {appearance:?} does not float: no rim, no drop shadow"
++        );
++        assert!(
++            style.box_shadow.clone().unwrap_or_default().is_empty(),
++            "elevation_1 in {appearance:?} carries no shadow of any kind (R2.1)"
++        );
++    }
++}
++
++/// The elevated surface keeps the shadow stack the enum defines — the helper must
++/// pass it through, not substitute its own.
++#[gpui::test]
++fn elevated_passes_through_the_index_shadow_stack(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let (style, expected) = cx.update(|cx: &mut App| {
++        let mut element = div().elevation_3(cx);
++        let style = element.style().clone();
++        (style, ElevationIndex::ModalSurface.shadow(cx))
++    });
++
++    let applied: Vec<BoxShadow> = style
++        .box_shadow
++        .unwrap_or_default()
++        .into_iter()
++        .filter(|shadow| !shadow.inset)
++        .collect();
++
++    assert_eq!(
++        applied, expected,
++        "elevation_3's drop shadows must be exactly ElevationIndex::ModalSurface::shadow() \
++         — Zed's own 4-layer stack, kept (design.md §Elevation)"
++    );
++}
++
++/// D24 / R2.2 — the defect this sub-task exists to kill, and the one assertion the
++/// rest of this file cannot make.
++///
++/// `elevated()` used to hard-code `elevated_surface_background` and hand `index` to
++/// `shadow()` alone. So `elevation_1`, `_2` and `_3` all painted the *same*
++/// background, and `ElevationIndex::bg()` was called from nowhere in this crate.
++/// Repainting the palette (5.1) could not have fixed that: the helper never asked
++/// the enum which step it was on, so the luminance ladder would still have rendered
++/// flat, whatever the theme said.
++///
++/// `elevated_applies_a_hairline_border` above cannot catch this, and neither can
++/// any assertion made against the base theme. Under `LoadThemes::JustBase` the
++/// three backgrounds are equal *by data* — One Dark ships `surface ==
++/// elevated_surface`, and `modal_surface` falls back to `elevated_surface` — so a
++/// hard-coded background and a correctly wired one are indistinguishable, and a
++/// `background.is_some()` guard passes against both.
++///
++/// Hence the synthetic theme. That is not the cleverness this file's header warns
++/// off: the header rules out asserting the *values* of the ladder, which are theme
++/// data and ship in the JSON (R2.1's data half, asserted in 5.1 against the Zeo
++/// theme). What is asserted here is the *wiring* — that the background is resolved
++/// through the supplied index — and three distinct steps are simply the instrument
++/// that makes the wiring observable. Give the levels the same colour and there is
++/// nothing to see.
++#[gpui::test]
++fn elevated_resolves_its_background_from_the_index(cx: &mut TestAppContext) {
++    init_test(cx);
++
++    let surface = hsla(0., 0., 0.10, 1.);
++    let elevated_surface = hsla(0., 0., 0.16, 1.);
++    let modal_surface = hsla(0., 0., 0.22, 1.);
++
++    cx.update(|cx: &mut App| {
++        let mut theme = (**cx.theme()).clone();
++        theme.styles.colors.surface_background = surface;
++        theme.styles.colors.elevated_surface_background = elevated_surface;
++        theme.styles.colors.modal_surface_background = modal_surface;
++        GlobalTheme::update_theme(cx, std::sync::Arc::new(theme));
++    });
++
++    let painted = [
++        (
++            "elevation_1",
++            ElevationIndex::Surface,
++            background_of(&style_of(cx, |cx| div().elevation_1(cx))),
++        ),
++        (
++            "elevation_2",
++            ElevationIndex::ElevatedSurface,
++            background_of(&style_of(cx, |cx| div().elevation_2(cx))),
++        ),
++        (
++            "elevation_3",
++            ElevationIndex::ModalSurface,
++            background_of(&style_of(cx, |cx| div().elevation_3(cx))),
++        ),
++    ];
++
++    for (name, index, background) in &painted {
++        let expected = cx.update(|cx: &mut App| index.bg(cx));
++        assert_eq!(
++            *background,
++            Fill::from(expected),
++            "{name} must resolve its background through {index}'s bg() (D24). Hard-coding \
++             `elevated_surface_background` here paints every level alike and leaves bg() dead, \
++             so no palette can ever reach the screen"
++        );
++    }
++
++    let [(_, _, first), (_, _, second), (_, _, third)] = &painted;
++    for (left_name, left, right_name, right) in [
++        ("elevation_1", first, "elevation_2", second),
++        ("elevation_2", second, "elevation_3", third),
++        ("elevation_1", first, "elevation_3", third),
++    ] {
++        assert_ne!(
++            left, right,
++            "{left_name} and {right_name} must paint DISTINCT backgrounds once the theme gives \
++             them distinct steps (R2.2) — identical backgrounds mean the index was ignored"
++        );
++    }
++}
+diff --git a/crates/ui/src/traits/styled_ext.rs b/crates/ui/src/traits/styled_ext.rs
+index 849e56a024..760cf08892 100644
+--- a/crates/ui/src/traits/styled_ext.rs
++++ b/crates/ui/src/traits/styled_ext.rs
+@@ -1,20 +1,53 @@
+-use gpui::{App, Styled, hsla};
++use gpui::{App, BoxShadow, Styled, hsla};
+ 
+-use crate::ElevationIndex;
+ use crate::prelude::*;
++use crate::{ElevationIndex, ZeoRadius};
++
++/// The Zeo radius step a surface takes at each elevation.
++///
++/// A container is promoted one step above the controls it holds (design.md
++/// §Radius), so that the surface always reads as the outermost shape: panels and
++/// popovers land on `lg`, and a modal — the command palette included — on `xl`.
++/// The grounded levels are full-bleed and take no radius at all.
++///
++/// This is the *only* place the dependent surfaces get their radius from. Pickers,
++/// the command palette and the notification toasts set no `.rounded_*()` of their
++/// own — they inherit it from here, which is why converting these two helpers
++/// re-skins all of them without a call site being touched (R2.6).
++fn radius(index: ElevationIndex) -> ZeoRadius {
++    match index {
++        ElevationIndex::Background | ElevationIndex::EditorSurface => ZeoRadius::None,
++        ElevationIndex::Surface | ElevationIndex::ElevatedSurface => ZeoRadius::Lg,
++        ElevationIndex::ModalSurface => ZeoRadius::Xl,
++    }
++}
++
++/// This level's drop shadows and its inset rim, as the single stack GPUI expects:
++/// `box_shadow` carries both kinds, and the paint pass splits them on
++/// [`BoxShadow::inset`] (`gpui/src/window.rs:3676,3712`).
++///
++/// The rim is appended rather than prepended only to keep the drop shadows in the
++/// order [`ElevationIndex::shadow`] defines them; across the inset boundary the
++/// order carries no meaning. On the grounded levels both halves are empty, which is
++/// what leaves `elevation_1` with no shadow of any kind.
++fn shadows_and_rim(index: ElevationIndex, cx: &App) -> Vec<BoxShadow> {
++    let mut stack = index.shadow(cx);
++    stack.extend(index.rim(cx));
++    stack
++}
+ 
+ fn elevated<E: Styled>(this: E, cx: &App, index: ElevationIndex) -> E {
+-    this.bg(cx.theme().colors().elevated_surface_background)
+-        .rounded_lg()
++    this.bg(index.bg(cx))
++        .rounded(radius(index).px(cx))
+         .border_1()
+         .border_color(cx.theme().colors().border_variant)
+-        .shadow(index.shadow(cx))
++        .shadow(shadows_and_rim(index, cx))
+ }
+ 
+ fn elevated_borderless<E: Styled>(this: E, cx: &mut App, index: ElevationIndex) -> E {
+-    this.bg(cx.theme().colors().elevated_surface_background)
+-        .rounded_lg()
+-        .shadow(index.shadow(cx))
++    this.bg(index.bg(cx))
++        .rounded(radius(index).px(cx))
++        .shadow(shadows_and_rim(index, cx))
+ }
+ 
+ /// Extends [`gpui::Styled`] with Zed-specific styling methods.
+@@ -40,7 +73,7 @@ pub trait StyledExt: Styled + Sized {
+ 
+     /// The [`Surface`](ElevationIndex::Surface) elevation level, located above the app background, is the standard level for all elements
+     ///
+-    /// Sets `bg()`, `rounded_lg()`, `border()`, `border_color()`, `shadow()`
++    /// Sets `bg()`, `rounded()`, `border()`, `border_color()`, `shadow()`
+     ///
+     /// Example Elements: Title Bar, Panel, Tab Bar, Editor
+     fn elevation_1(self, cx: &App) -> Self {
+@@ -56,7 +89,7 @@ pub trait StyledExt: Styled + Sized {
+ 
+     /// Non-Modal Elevated Surfaces appear above the [`Surface`](ElevationIndex::Surface) layer and is used for things that should appear above most UI elements like an editor or panel, but not elements like popovers, context menus, modals, etc.
+     ///
+-    /// Sets `bg()`, `rounded_lg()`, `border()`, `border_color()`, `shadow()`
++    /// Sets `bg()`, `rounded()`, `border()`, `border_color()`, `shadow()`
+     ///
+     /// Examples: Notifications, Palettes, Detached/Floating Windows, Detached/Floating Panels
+     fn elevation_2(self, cx: &App) -> Self {
+@@ -76,7 +109,7 @@ pub trait StyledExt: Styled + Sized {
+     ///
+     /// If the element does not have this behavior, it should be rendered at the [`Elevated Surface`](ElevationIndex::ElevatedSurface) layer.
+     ///
+-    /// Sets `bg()`, `rounded_lg()`, `border()`, `border_color()`, `shadow()`
++    /// Sets `bg()`, `rounded()`, `border()`, `border_color()`, `shadow()`
+     ///
+     /// Examples: Settings Modal, Channel Management, Wizards/Setup UI, Dialogs
+     fn elevation_3(self, cx: &App) -> Self {
+-- 
+2.55.0
+

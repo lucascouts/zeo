@@ -1,0 +1,43 @@
+phase: 3
+approved: 2026-07-11  # phases 1 and 2 approved at the gate
+project-hash: b5bf793
+workflow: design-first
+artifact: https://claude.ai/code/artifact/2b469aba-4eba-4ed9-8ef6-d9bb9afaf23d
+clarify_decisions:
+  scope: 2 probative pilots (elevation chokepoint + buttons/toggles); chrome -> 003
+  tokens: settings-resolved from day one (ThemeSettingsProvider), no editing UI
+  rebase: decided per-file from measured 6-month churn
+  theme: Zeo family, Dark + Light
+  scales: recalibrate spacing/elevation/typography + create the radius token
+  fonts: unchanged; work the scale, weights and hierarchy
+  syntax: derived from One Dark, harmonised with the Zeo accent
+  art: nanobanana explores -> hand-drawn geometric SVG -> PNG 512/1024
+  acceptance: scripts/shot.sh (grim, fixed fixture) + human judgement at the gate
+  trademark: symmetric rule against Hasbro, written into design.md
+research_findings:
+  - text.accent == info in both variants (one.json:34=128, 448=540)
+  - elevated_surface.background == surface.background (one.json:16=17, 430=431)
+  - styled_ext.rs:6-18 is the chokepoint - 55 call sites, 45 files, churn 0
+  - default.json file churn 154/6mo but theme-block line churn 0
+  - GPUI cannot render: tracking, blur, >2-stop gradients, container transforms, per-side border colours
+  - GPUI has no variable-font axis API; bundle ships weights 400 and 600 only
+
+amendments_from_test_advisor_dissent:
+  D21: radius is density-invariant but ui_font_size-proportional (no density triple)
+  D22: Full is a fixed sentinel, exempt from ui_font_size scaling
+  D23: the zeo namespace ships one real knob - zeo.radius_scale f32, default 1.0
+  task_3_2: gained a real test (styled_ext StyleRefinement) - it had NONE, and it is the 55-call-site function
+  R2_1: luminance-step assertion moved out of the ui unit test into the theme-data test (ui CANNOT assert it - bg() reads the active theme, which is One Dark under test)
+  per_corner_token: dropped as phantom - gpui rounded_tl already takes Pixels
+  closure_test: must compute against real DynamicSpacing, not literals
+  live_reload_test: must assert the provider's returned value, never refresh_windows (SettingsStore refreshes on ANY change)
+red_verification:
+  shot_test_sh: observed at authoring time (bash, workspace-only)
+  rust_tests: deferred to Run mode - executor confirms Red on materialisation (avoids a throwaway full debug rebuild of the fork)
+round_2_amendments:
+  D24: "THIRD DEFECT - styled_ext.rs:7,15 hard-code elevated_surface_background and use ElevationIndex ONLY for the shadow. ElevationIndex::bg() is dead code, called from nowhere in crates/ui. elevation_1/2/3 all paint the SAME background. This is why findings 1 and 2 were not enough: fixing the palette changes nothing while the helper never asks the enum which step it is on."
+  D25: "new theme colour modal_surface_background - ElevatedSurface and ModalSurface both resolved to elevated_surface_background (elevation.rs:89-90), so e2/e3 had no colour to step to. Adds colors.rs (churn 6) + settings_content/theme.rs (churn 12). Existing themes fall back to elevated_surface_background."
+  radius_scale_clamp: "0.5-2.0 (D23) - keeps 0 and 1000 out of a user-editable JSON"
+  task_4_1: "gained a real test - the coverage grep passes if every button becomes ZeoRadius::Full; it proves literals are gone, never that the right step arrived"
+  R2_renumbered: "R2.1-R2.7 contiguous; R2.2 = index.bg(cx), R2.3 = modal fallback"
+  ears_total: 31

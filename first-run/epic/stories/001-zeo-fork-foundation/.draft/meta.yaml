@@ -1,0 +1,7 @@
+phase: 3
+approved: 2026-07-10 (all phases)
+project-hash: none (workspace not yet a git repo)
+analyst_output: |
+  Codebase analysis source: ZEO.md (prior-session deep research on Zed internals) +
+  bentoo overlay app-editors/zed (ebuild zed-1.12.0_pre20260710-r1, patches 0001,0002,0005-0009).
+  Completeness checklist: 10 assertive questions, all confirmed by user on 2026-07-10 (D1-D10 in design.md).

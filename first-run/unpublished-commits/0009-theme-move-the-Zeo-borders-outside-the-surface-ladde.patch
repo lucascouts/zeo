@@ -1,0 +1,308 @@
+From e0de67d585e370f27625cb29230390a6f0ac085b Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Mon, 13 Jul 2026 14:02:29 -0300
+Subject: [PATCH 9/9] theme: move the Zeo borders outside the surface ladder
+
+A regression this story introduced, not a defect it inherited. Upstream One's
+ladder is flat -- surface and elevated are byte-identical -- so one fixed
+border.variant sat consistently above all of it and could not cross anything.
+Zeo built a real four-rung ladder and left both border tokens exactly where One
+had them. border.variant is now lighter than the surface rung, byte-adjacent to
+the elevated rung, and darker than the modal rung: it crosses the ladder instead
+of clearing it.
+
+Against the elevated surface it scores 1.00:1. The hairline is not faint there,
+it is absent -- and StyledExt::elevated paints border_variant on every elevated
+surface, so this is not one widget but all 71 call sites: every picker, command
+palette, popover, context menu and toast. R2.1 asks for a background step AND a
+hairline to separate an elevated surface from the one beneath. What shipped had
+only the step.
+
+Nothing caught it because nothing asserted it. design.md required boundaries to
+clear a contrast floor, but that clause narrowed to "the accent clears AA" when
+it was transcribed into the task plan, so no test ever measured a border against
+a surface. All seven pre-authored tests were green through the whole regression.
+The test added here is property-based -- it reads whatever hexes the palette
+carries and computes the contrast, so it cannot be satisfied by pinning a value
+-- and it sweeps both tokens against every rung in both variants, sixteen pairs,
+accumulating all violations rather than short-circuiting on the first. It was
+confirmed red before the fix, at 1.00:1 on the elevated pair, and re-proved by
+mutation afterwards.
+
+The floors are perceptibility floors, deliberately low: border 1.5:1,
+border.variant 1.25:1. The 3:1 that WCAG 1.4.11 mandates governs focus rings and
+UI components, not surface separators; border.focused already clears it at
+3.77-5.81:1 and is now pinned by its own sweep. A hairline is supposed to be a
+hairline -- it only has to exist.
+
+Two floors rather than one, on purpose. A single shared floor drives both tokens
+to the same colour and destroys the prominence hierarchy that 162 border and 127
+border_variant call sites consume, so the two are held distinct by a test as
+well.
+
+The values move only in lightness -- hue and saturation are preserved, dark
+borders up and light borders down, outward from the ladder in both directions --
+and the four surface rungs are untouched. The equilibrium is tight by design:
+four of the sixteen pairs clear their floor by under 0.003, all of them at the
+ladder's extremes, which is the unavoidable geometry of one token spanning four
+rungs. Any future repaint of the canvas or modal rung will flip the sweep red
+without a border being touched. That is the sweep working, not the sweep being
+brittle.
+
+Covers R2.1, R3.9, R3.10.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ assets/themes/zeo/zeo.json               |   8 +-
+ crates/theme_settings/tests/zeo_theme.rs | 212 +++++++++++++++++++++++
+ 2 files changed, 216 insertions(+), 4 deletions(-)
+
+diff --git a/assets/themes/zeo/zeo.json b/assets/themes/zeo/zeo.json
+index ee6c7a0492..d4ee789aae 100644
+--- a/assets/themes/zeo/zeo.json
++++ b/assets/themes/zeo/zeo.json
+@@ -7,8 +7,8 @@
+       "name": "Zeo Dark",
+       "appearance": "dark",
+       "style": {
+-        "border": "#524f62ff",
+-        "border.variant": "#403d4dff",
++        "border": "#636077ff",
++        "border.variant": "#58546aff",
+         "border.focused": "#bd93f9ff",
+         "border.selected": "#5b4a86ff",
+         "border.transparent": "#00000000",
+@@ -422,8 +422,8 @@
+       "name": "Zeo Light",
+       "appearance": "light",
+       "style": {
+-        "border": "#cecbd8ff",
+-        "border.variant": "#e4e3ebff",
++        "border": "#b9b4c7ff",
++        "border.variant": "#c8c6d7ff",
+         "border.focused": "#7c3aedff",
+         "border.selected": "#c9b4f5ff",
+         "border.transparent": "#00000000",
+diff --git a/crates/theme_settings/tests/zeo_theme.rs b/crates/theme_settings/tests/zeo_theme.rs
+index 14a7330080..336f149a6c 100644
+--- a/crates/theme_settings/tests/zeo_theme.rs
++++ b/crates/theme_settings/tests/zeo_theme.rs
+@@ -413,3 +413,215 @@ fn default_json_theme_names_match_the_theme_family() {
+         );
+     }
+ }
++
++// --- Borders against the ladder (sub-task 5.4 — R2.1, R3.9, R3.10) ------------
++//
++// The tests above assert the ladder's background steps. They say nothing about
++// what is DRAWN on those rungs, and that gap is where story 002's own regression
++// lives: Zeo built a four-rung luminance ladder and left the two border tokens on
++// the values upstream One Dark chose for a FLAT ladder (where surface == elevated,
++// so one fixed border sat above all of it). The border now crosses the ladder
++// instead of clearing it — `border.variant` is lighter than e1 and darker than e3,
++// and it disappears at e2.
++//
++// This is not one widget. `StyledExt::elevation_*` paints `border_variant` on
++// every elevated surface (`crates/ui/src/traits/styled_ext.rs:43`), so an
++// imperceptible hairline is an imperceptible hairline on every picker, command
++// palette, popover, context menu and toast at once. R2.1 demands a background step
++// AND a hairline; the rungs alone are half the requirement.
++//
++// PROPERTY, NOT VALUE: these tests read whatever hexes `zeo.json` carries and
++// compute contrast from them. They never compare against a hard-coded palette
++// value — pinning the hexes would only check the data against itself, and would
++// stay green through any future repaint that silently re-flattened the hairline.
++// The floors below are the contract; the hexes are the executor's choice.
++
++/// WCAG 1.4.11 (non-text contrast) — what the focus ring, a UI component boundary
++/// a user must be able to LOCATE, is actually governed by (R3.9).
++const UI_COMPONENT_CONTRAST: f32 = 3.0;
++
++/// Perceptibility floors for decorative separators (R3.10). These are deliberately
++/// below 3:1: a hairline that divides two panels is not a control a user must find,
++/// it is a seam they must be able to SEE. Below roughly these ratios a 1px seam on
++/// a mid-tone surface stops resolving as a line at all — 1.00:1 (today's
++/// `border.variant` on the elevated surface) is not a faint line, it is no line.
++const BORDER_CONTRAST: f32 = 1.5;
++const BORDER_VARIANT_CONTRAST: f32 = 1.25;
++
++/// Every surface rung a border can be drawn on: e0 canvas → e1 surface →
++/// e2 elevated → e3 modal. A border token is one value shared across all four, so
++/// "it looks fine against the canvas" is not evidence about anything but the canvas.
++fn surface_rungs<'a>(name: &str, style: &'a theme_settings::ThemeStyleContent) -> Vec<(&'a str, Rgba)> {
++    vec![
++        (
++            "background",
++            color(&format!("{name}: background"), &style.colors.background),
++        ),
++        (
++            "surface.background",
++            color(
++                &format!("{name}: surface.background"),
++                &style.colors.surface_background,
++            ),
++        ),
++        (
++            "elevated_surface.background",
++            color(
++                &format!("{name}: elevated_surface.background"),
++                &style.colors.elevated_surface_background,
++            ),
++        ),
++        (
++            "modal_surface.background",
++            color(
++                &format!("{name}: modal_surface.background"),
++                &style.colors.modal_surface_background,
++            ),
++        ),
++    ]
++}
++
++/// R3.10 — the 16-pair sweep: 2 border tokens × 4 surface rungs × 2 variants.
++///
++/// Accumulates every violation and fails ONCE with the whole table. A per-pair
++/// `assert!` would panic on the first bad pair and hide the rest, which is exactly
++/// how a token that fails on three rungs gets "fixed" one rung at a time until it
++/// fails on a fourth. The fix is a re-derivation of both tokens against the whole
++/// ladder, so the whole ladder has to be visible at once.
++#[test]
++fn both_border_tokens_stay_perceptible_on_every_surface_rung_in_both_variants() {
++    let family = zeo_family();
++
++    let mut violations: Vec<String> = Vec::new();
++    let mut measured = 0usize;
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++        let rungs = surface_rungs(name, style);
++
++        let tokens = [
++            (
++                "border",
++                color(&format!("{name}: border"), &style.colors.border),
++                BORDER_CONTRAST,
++            ),
++            (
++                "border.variant",
++                color(&format!("{name}: border.variant"), &style.colors.border_variant),
++                BORDER_VARIANT_CONTRAST,
++            ),
++        ];
++
++        for (token_name, token, floor) in tokens {
++            for (rung_name, rung) in &rungs {
++                measured += 1;
++                let ratio = contrast_ratio(token, *rung);
++                if ratio < floor {
++                    violations.push(format!(
++                        "  {name:10} {token_name:15} on {rung_name:28} {ratio:5.2}:1  (floor {floor}:1)"
++                    ));
++                }
++            }
++        }
++    }
++
++    assert_eq!(measured, 16, "the sweep must cover all 2 × 4 × 2 pairs");
++
++    assert!(
++        violations.is_empty(),
++        "{} of 16 border/surface pairs are below the perceptibility floor (R3.10, R2.1):\n{}\n\n\
++         A border token is ONE value painted on ALL FOUR rungs, so it has to clear the floor \
++         against the whole ladder, not against the canvas it happened to be picked on. Story 002 \
++         built the ladder (e0 → e1 → e2 → e3) and left these two tokens where upstream One Dark \
++         had them — where the ladder was FLAT (surface == elevated) and one fixed border could \
++         clear all of it. They now cross the ladder instead of clearing it.\n\n\
++         The headline: `border.variant` is byte-adjacent to elevated_surface, so it scores \
++         1.00:1 there — the hairline is not faint, it is ABSENT, on all 71 elevated call sites \
++         (every picker, palette, popover, context menu, toast) that StyledExt::elevation_* paints \
++         it on (crates/ui/src/traits/styled_ext.rs:43).\n\n\
++         Fix by re-deriving BOTH tokens against the whole ladder — not by nudging one rung until \
++         its own line goes green.",
++        violations.len(),
++        violations.join("\n")
++    );
++}
++
++/// R3.9 — the focus ring is the one border WCAG 1.4.11 genuinely governs: it is how
++/// a keyboard user knows where they are, so it must clear 3:1 on every surface it
++/// can land on (and a focusable control can land on all four).
++///
++/// GREEN TODAY, AND MEANT TO BE. This is a regression guard, not a Red — the whole
++/// point is that the accent-derived ring already clears the floor everywhere
++/// (3.77:1 is its worst case), and re-deriving the two decorative border tokens
++/// against the ladder must not drag it under. Do NOT "fix" this test if it starts
++/// passing; it never stopped.
++#[test]
++fn the_focus_ring_clears_wcag_non_text_contrast_on_every_surface_rung() {
++    let family = zeo_family();
++
++    let mut violations: Vec<String> = Vec::new();
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++        let focused = color(
++            &format!("{name}: border.focused"),
++            &style.colors.border_focused,
++        );
++
++        for (rung_name, rung) in surface_rungs(name, style) {
++            let ratio = contrast_ratio(focused, rung);
++            if ratio < UI_COMPONENT_CONTRAST {
++                violations.push(format!(
++                    "  {name:10} border.focused on {rung_name:28} {ratio:5.2}:1  \
++                     (floor {UI_COMPONENT_CONTRAST}:1)"
++                ));
++            }
++        }
++    }
++
++    assert!(
++        violations.is_empty(),
++        "the focus ring falls below {UI_COMPONENT_CONTRAST}:1 on {} surface(s) (R3.9):\n{}\n\n\
++         A focus ring is not decoration — it is the only thing telling a keyboard user where \
++         they are, and WCAG 1.4.11 puts it at 3:1 against ITS OWN adjacent surface. A ring tuned \
++         against the canvas that vanishes inside a modal is an inaccessible ring.",
++        violations.len(),
++        violations.join("\n")
++    );
++}
++
++/// The GOTCHA guard. The cheapest way to make the 16-pair sweep pass is to collapse
++/// `border` and `border.variant` onto a single value that clears both floors — and
++/// that would be a fix that passes the suite and destroys the design.
++///
++/// The two tokens exist to encode PROMINENCE: `border` is a structural division
++/// (162 call sites), `border.variant` a quieter internal seam (127 call sites). Fuse
++/// them and every one of those 289 sites renders the same weight, so the UI loses its
++/// hierarchy while every contrast assertion above stays green. Both tokens must clear
++/// their floor AND remain distinguishable from each other.
++///
++/// Green today; it is here to stay green through the fix, not to go green because of it.
++#[test]
++fn the_two_border_tokens_remain_distinct_colours_in_both_variants() {
++    let family = zeo_family();
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++
++        let border = color(&format!("{name}: border"), &style.colors.border);
++        let border_variant = color(
++            &format!("{name}: border.variant"),
++            &style.colors.border_variant,
++        );
++
++        assert!(
++            !same_color(border, border_variant),
++            "{name}: `border` and `border.variant` must remain DISTINCT colours. Collapsing them \
++             onto one value is the cheapest way to satisfy the perceptibility floors and the \
++             worst — the two tokens are a prominence hierarchy (162 `border` call sites for \
++             structural divisions, 127 `border_variant` for quieter internal seams). Fusing them \
++             flattens all 289 to one weight, and every contrast assertion in this file stays \
++             green while it happens. Raise the variant against the ladder; do not delete it."
++        );
++    }
++}
+-- 
+2.55.0
+

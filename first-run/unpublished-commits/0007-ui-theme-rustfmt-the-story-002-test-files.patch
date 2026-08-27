@@ -1,0 +1,269 @@
+From 06dc88dc9e36f0e291529e4d5f5181e68529a3cf Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sun, 12 Jul 2026 02:59:46 -0300
+Subject: [PATCH 7/9] ui, theme: rustfmt the story-002 test files
+
+The pre-authored tests were written by hand at plan time and never passed
+through rustfmt, so they were the only files story 002 added to the repo's
+fmt-check failure. Layout only: rewrapped call arguments and the trailing commas
+rustfmt adds when it explodes a call across lines.
+
+No literal changed -- every string and every numeric expectation is byte-identical
+before and after -- so no assertion moved. The suite reports the same 180 passing
+tests it did before.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ .../theme_settings/src/zeo_settings_tests.rs  |  8 +--
+ crates/theme_settings/tests/zeo_theme.rs      |  8 +--
+ .../ui/src/components/control_radius_tests.rs | 26 ++++++----
+ crates/ui/src/styles/elevation_tests.rs       | 29 ++++++++---
+ crates/ui/src/styles/radius_tests.rs          | 51 +++++++++++++++----
+ 5 files changed, 84 insertions(+), 38 deletions(-)
+
+diff --git a/crates/theme_settings/src/zeo_settings_tests.rs b/crates/theme_settings/src/zeo_settings_tests.rs
+index cb6190dcb2..ce6dc57d93 100644
+--- a/crates/theme_settings/src/zeo_settings_tests.rs
++++ b/crates/theme_settings/src/zeo_settings_tests.rs
+@@ -81,9 +81,7 @@ fn zeo_radius_scale_defaults_to_one(cx: &mut TestAppContext) {
+ }
+ 
+ #[gpui::test]
+-fn writing_zeo_radius_scale_changes_the_value_the_provider_returns(
+-    cx: &mut TestAppContext,
+-) {
++fn writing_zeo_radius_scale_changes_the_value_the_provider_returns(cx: &mut TestAppContext) {
+     init_test(cx);
+ 
+     let before = cx.update(|cx| theme::theme_settings(cx).zeo_radius_scale(cx));
+@@ -101,9 +99,7 @@ fn writing_zeo_radius_scale_changes_the_value_the_provider_returns(
+ }
+ 
+ #[gpui::test]
+-fn zeo_radius_scale_tracks_a_second_change_without_reinitialisation(
+-    cx: &mut TestAppContext,
+-) {
++fn zeo_radius_scale_tracks_a_second_change_without_reinitialisation(cx: &mut TestAppContext) {
+     init_test(cx);
+ 
+     write_user_settings(cx, r#"{"zeo": {"radius_scale": 1.5}}"#);
+diff --git a/crates/theme_settings/tests/zeo_theme.rs b/crates/theme_settings/tests/zeo_theme.rs
+index ab77a47d73..14a7330080 100644
+--- a/crates/theme_settings/tests/zeo_theme.rs
++++ b/crates/theme_settings/tests/zeo_theme.rs
+@@ -244,10 +244,7 @@ fn elevated_surface_is_a_real_luminance_step_above_surface_in_both_variants() {
+     for name in ["Zeo Dark", "Zeo Light"] {
+         let style = &variant(&family, name).style;
+ 
+-        let background = color(
+-            &format!("{name}: background"),
+-            &style.colors.background,
+-        );
++        let background = color(&format!("{name}: background"), &style.colors.background);
+         let surface = color(
+             &format!("{name}: surface.background"),
+             &style.colors.surface_background,
+@@ -273,8 +270,7 @@ fn elevated_surface_is_a_real_luminance_step_above_surface_in_both_variants() {
+              (R2.1, D7)."
+         );
+ 
+-        let ladder_step =
+-            (relative_luminance(surface) - relative_luminance(background)).abs();
++        let ladder_step = (relative_luminance(surface) - relative_luminance(background)).abs();
+         assert!(
+             ladder_step >= MIN_LUMINANCE_STEP,
+             "{name}: surface.background must also sit a visible step off the canvas \
+diff --git a/crates/ui/src/components/control_radius_tests.rs b/crates/ui/src/components/control_radius_tests.rs
+index ea980a808e..70b7fe4471 100644
+--- a/crates/ui/src/components/control_radius_tests.rs
++++ b/crates/ui/src/components/control_radius_tests.rs
+@@ -93,15 +93,13 @@ fn write_user_settings(cx: &mut TestAppContext, json: &str) {
+ /// hard-codes 6.0 pins the literal it was meant to remove, and would go green against a
+ /// re-introduced `.rounded_md()`.
+ fn resolve(cx: &mut TestAppContext, radius: ZeoRadius) -> (Pixels, Pixels) {
+-    cx.update(|cx: &mut App| {
+-        (
+-            theme::theme_settings(cx).ui_font_size(cx),
+-            radius.px(cx),
+-        )
+-    })
++    cx.update(|cx: &mut App| (theme::theme_settings(cx).ui_font_size(cx), radius.px(cx)))
+ }
+ 
+-fn style_of<E: Styled>(cx: &mut TestAppContext, build: impl FnOnce(&mut App) -> E) -> StyleRefinement {
++fn style_of<E: Styled>(
++    cx: &mut TestAppContext,
++    build: impl FnOnce(&mut App) -> E,
++) -> StyleRefinement {
+     cx.update(|cx: &mut App| {
+         let mut element = build(cx);
+         element.style().clone()
+@@ -246,7 +244,12 @@ fn a_checkbox_takes_the_badge_step(cx: &mut TestAppContext) {
+         let (rem_size, expected) = resolve(cx, ZeoRadius::Sm);
+ 
+         let style = style_of(cx, |cx| Checkbox::box_element(cx));
+-        assert_every_corner(&format!("checkbox box @ {label}"), &style, rem_size, expected);
++        assert_every_corner(
++            &format!("checkbox box @ {label}"),
++            &style,
++            rem_size,
++            expected,
++        );
+     }
+ 
+     write_user_settings(cx, r#"{"ui_font_size": 16}"#);
+@@ -304,7 +307,12 @@ fn a_switch_is_a_pill_at_every_level(cx: &mut TestAppContext) {
+             ("track", style_of(cx, |cx| Switch::track(cx))),
+             ("thumb", style_of(cx, |cx| Switch::thumb(cx))),
+         ] {
+-            assert_every_corner(&format!("switch {name} @ {label}"), &style, rem_size, expected);
++            assert_every_corner(
++                &format!("switch {name} @ {label}"),
++                &style,
++                rem_size,
++                expected,
++            );
+         }
+     }
+ }
+diff --git a/crates/ui/src/styles/elevation_tests.rs b/crates/ui/src/styles/elevation_tests.rs
+index 6e3d57fc76..6945eb4f85 100644
+--- a/crates/ui/src/styles/elevation_tests.rs
++++ b/crates/ui/src/styles/elevation_tests.rs
+@@ -68,8 +68,10 @@ const ALL_INDICES: [ElevationIndex; 5] = [
+ 
+ /// e2 and e3 — the only levels that float, and so the only levels that carry a
+ /// shadow and a rim (design.md §Elevation).
+-const FLOATING_INDICES: [ElevationIndex; 2] =
+-    [ElevationIndex::ElevatedSurface, ElevationIndex::ModalSurface];
++const FLOATING_INDICES: [ElevationIndex; 2] = [
++    ElevationIndex::ElevatedSurface,
++    ElevationIndex::ModalSurface,
++];
+ 
+ /// e0 and e1 — separated by background step and hairline alone.
+ const GROUNDED_INDICES: [ElevationIndex; 3] = [
+@@ -207,7 +209,10 @@ fn floating_levels_carry_an_inset_rim_and_grounded_levels_do_not(cx: &mut TestAp
+                 panic!("{index} in {appearance:?} must carry an inset rim (R2.2)");
+             };
+ 
+-            assert!(rim.inset, "{index}: the rim must be an INSET shadow, not a drop");
++            assert!(
++                rim.inset,
++                "{index}: the rim must be an INSET shadow, not a drop"
++            );
+             assert!(
+                 f32::from(rim.offset.y) > 0.,
+                 "{index}: the rim sits on the TOP edge (positive y offset), got {:?}",
+@@ -321,9 +326,21 @@ fn elevated_takes_its_radius_from_the_zeo_token(cx: &mut TestAppContext) {
+         // Panels and popovers step up to `lg` (8); modals and the command palette to
+         // `xl` (12) — design.md §Radius, "promoting containers up a step".
+         let expectations = [
+-            ("elevation_1", style_of(cx, |cx| div().elevation_1(cx)), ZeoRadius::Lg),
+-            ("elevation_2", style_of(cx, |cx| div().elevation_2(cx)), ZeoRadius::Lg),
+-            ("elevation_3", style_of(cx, |cx| div().elevation_3(cx)), ZeoRadius::Xl),
++            (
++                "elevation_1",
++                style_of(cx, |cx| div().elevation_1(cx)),
++                ZeoRadius::Lg,
++            ),
++            (
++                "elevation_2",
++                style_of(cx, |cx| div().elevation_2(cx)),
++                ZeoRadius::Lg,
++            ),
++            (
++                "elevation_3",
++                style_of(cx, |cx| div().elevation_3(cx)),
++                ZeoRadius::Xl,
++            ),
+             (
+                 "elevation_2_borderless",
+                 style_of(cx, |cx| div().elevation_2_borderless(cx)),
+diff --git a/crates/ui/src/styles/radius_tests.rs b/crates/ui/src/styles/radius_tests.rs
+index 19e33079d2..91417fed24 100644
+--- a/crates/ui/src/styles/radius_tests.rs
++++ b/crates/ui/src/styles/radius_tests.rs
+@@ -116,9 +116,17 @@ fn each_step_resolves_to_the_scale_at_the_default_ui_font_size(cx: &mut TestAppC
+     write_user_settings(cx, r#"{"ui_font_size": 16}"#);
+ 
+     for (radius, expected) in SCALE {
+-        assert_px(&format!("{radius:?} @ ui_font_size 16"), resolve(cx, radius), expected);
++        assert_px(
++            &format!("{radius:?} @ ui_font_size 16"),
++            resolve(cx, radius),
++            expected,
++        );
+     }
+-    assert_px("Full @ ui_font_size 16", resolve(cx, ZeoRadius::Full), FULL_PX);
++    assert_px(
++        "Full @ ui_font_size 16",
++        resolve(cx, ZeoRadius::Full),
++        FULL_PX,
++    );
+ }
+ 
+ /// THE test. `DynamicSpacing::px(cx)` is `ui_font_size × ratio`, NOT `16 × ratio`
+@@ -151,7 +159,11 @@ fn steps_scale_with_ui_font_size_not_with_a_fixed_16px_base(cx: &mut TestAppCont
+ 
+     // And the token must track a change in the other direction too.
+     write_user_settings(cx, r#"{"ui_font_size": 12}"#);
+-    assert_px("Md @ ui_font_size 12", resolve(cx, ZeoRadius::Md), 6.0 * 0.75);
++    assert_px(
++        "Md @ ui_font_size 12",
++        resolve(cx, ZeoRadius::Md),
++        6.0 * 0.75,
++    );
+ }
+ 
+ /// D22: `9999 × (ui_font_size / 16)` is meaningless.
+@@ -183,10 +195,7 @@ fn the_scale_is_density_invariant(cx: &mut TestAppContext) {
+     let spacing_at_default = cx.update(|cx: &mut App| DynamicSpacing::Base08.px(cx));
+ 
+     for density in ["compact", "comfortable"] {
+-        write_user_settings(
+-            cx,
+-            &format!(r#"{{"unstable.ui_density": "{density}"}}"#),
+-        );
++        write_user_settings(cx, &format!(r#"{{"unstable.ui_density": "{density}"}}"#));
+ 
+         // Guard against a vacuous pass: prove the density lever actually moved
+         // something before concluding that radius correctly ignored it.
+@@ -278,10 +287,30 @@ fn nested_radius_closure_holds_against_the_real_spacing_scale(cx: &mut TestAppCo
+         write_user_settings(cx, &format!(r#"{{"ui_font_size": {font_size}}}"#));
+ 
+         let cases = [
+-            ("modal / command palette", ZeoRadius::Xl, DynamicSpacing::Base08, ZeoRadius::Sm),
+-            ("popover, card", ZeoRadius::Lg, DynamicSpacing::Base04, ZeoRadius::Sm),
+-            ("panel", ZeoRadius::Lg, DynamicSpacing::Base06, ZeoRadius::Xs),
+-            ("window → content", ZeoRadius::Xxl, DynamicSpacing::Base04, ZeoRadius::Xl),
++            (
++                "modal / command palette",
++                ZeoRadius::Xl,
++                DynamicSpacing::Base08,
++                ZeoRadius::Sm,
++            ),
++            (
++                "popover, card",
++                ZeoRadius::Lg,
++                DynamicSpacing::Base04,
++                ZeoRadius::Sm,
++            ),
++            (
++                "panel",
++                ZeoRadius::Lg,
++                DynamicSpacing::Base06,
++                ZeoRadius::Xs,
++            ),
++            (
++                "window → content",
++                ZeoRadius::Xxl,
++                DynamicSpacing::Base04,
++                ZeoRadius::Xl,
++            ),
+         ];
+ 
+         for (case, outer, padding, inner) in cases {
+-- 
+2.55.0
+

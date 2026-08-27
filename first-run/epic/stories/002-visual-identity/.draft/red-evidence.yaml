@@ -1,0 +1,203 @@
+# Red evidence for story 002 — Zeo Visual Identity (pre-authored tests).
+#
+# Two kinds of entry:
+#   - OBSERVED  (`failed: true`)        — the test was run in Phase 3 and failed for
+#                                         the recorded reason. Quoted output is real.
+#   - DEFERRED  (`red_deferred: true`)  — the test was NOT run in Phase 3. The four
+#                                         Rust tests live inside `fork/`, and Phase 3
+#                                         is forbidden from writing there; a full
+#                                         debug rebuild would also be thrown away.
+#                                         The executor materialises each test, RUNS
+#                                         it, and confirms the failure matches
+#                                         `expected_failure` BEFORE writing a line of
+#                                         implementation. A deferred entry carries no
+#                                         `failed:` key — its Red is unproven until
+#                                         Run mode proves it.
+#
+# GOTCHA for the executor: `cd fork` before any cargo command. Cargo reads
+# `.cargo/config.toml` from the CWD, and `--manifest-path` from the workspace root
+# silently drops the fork's rustflags (docs/BUILD.md:26-31).
+#
+# ============================================================================
+# v2 AUDIT (2026-07-13, validate mode) — THE FOUR DEFERRED ENTRIES WERE NEVER
+# WRITTEN BACK. Read this before trusting any entry below.
+#
+# Only task 1.1 carries `failed: true`. Tasks 2.1, 2.2, 3.1 and 5.1 still carry
+# `red_deferred: true` and no `failed:` key — exactly as authored on 2026-07-11.
+# Run mode was REQUIRED to confirm the expected Red on materialisation, before
+# writing a line of implementation, and to record it here. It did not.
+#
+# Decisive: this file's mtime is frozen at 2026-07-11 16:05 (authoring time),
+# while `deviations.yaml` was still being edited at 2026-07-12 03:31 and
+# `tasks.md` at 2026-07-12 00:43 — ten hours of Run-mode writing, none of it here.
+#
+# WAS THE RED OBSERVED, OR ONLY SKIPPED? The honest answer is "observed, almost
+# certainly — but never attested for the RIGHT REASON, and we will not pretend
+# otherwise by back-dating a `failed: true` nobody wrote."
+#   FOR observed: `deviations.yaml` records discoveries that are obtainable ONLY
+#   by compiling and running these tests against an unimplemented tree — that the
+#   gpui harness pins `ui_font_size` to 14 (a runtime assertion failure), that
+#   `set_user_settings` returns `SettingsParseResult` and not `Result` (a compile
+#   error), and a real quoted mutation diff (`left: l=0.16 / right: l=0.10`).
+#   Those cannot be fabricated from static reading.
+#   AGAINST: what is recorded are precisely the failures this file PRE-EMPTIVELY
+#   DISQUALIFIED. Entry 2.1 says, verbatim, "WRONG reasons: any error naming
+#   SettingsStore" — and the register records exactly that (E0599 on
+#   `SettingsStore::update_global`). The transition wrong-reason-Red ->
+#   right-reason-Red -> Green is nowhere attested for any of the four.
+#
+# STANDING: formal Red precedence holds BY CONSTRUCTION — every entry below was
+# authored 2026-07-11 16:05, seven hours before the first implementation commit
+# (74d0c5443a, 2026-07-11 23:11). What is missing is the CONFIRMATION STEP the
+# protocol required, not the precedence itself.
+#
+# PROCESS FIX (carry into story 003): the executor must write the observed Red
+# back into this file as part of the sub-task, not merely observe it. An entry
+# that can only ever be falsified by a human reading a transcript is not evidence.
+# ============================================================================
+
+red-evidence:
+  - task: "1.1"
+    test_file: ".draft/authored-tests/tests/shot.test.sh"
+    target_path: "tests/shot.test.sh"
+    kind: integration
+    command: "bash .epic/stories/002-visual-identity/.draft/authored-tests/tests/shot.test.sh"
+    failed: true
+    reason: >-
+      FAIL shot script exists at scripts/shot.sh (not found:
+      .../.draft/authored-tests/scripts/shot.sh) — 1 checks, 1 failures — exit 1.
+      Right reason: the script under test does not exist. `scripts/` currently
+      holds only `sync-upstream.sh` (story 001). At the materialised path the same
+      guard reports the same failure against
+      /home/otaku/Projetos/Pessoais/zed/zeo/scripts/shot.sh.
+    observed_at_draft_path: true
+    recorded: 2026-07-11
+
+  - task: "2.1"
+    test_file: ".draft/authored-tests/fork/crates/theme_settings/src/zeo_settings_tests.rs"
+    target_path: "fork/crates/theme_settings/src/zeo_settings_tests.rs"
+    kind: unit
+    red_deferred: true
+    materialisation:
+      - "copy the file to its target path"
+      - "add `#[cfg(test)] mod zeo_settings_tests;` to fork/crates/theme_settings/src/theme_settings.rs"
+      - "no new dev-dependency needed (gpui + settings test-support already present)"
+    command_to_run: "cd fork && cargo test -p theme_settings zeo_"
+    expected_failure: >-
+      error[E0599]: no method named `zeo_radius_scale` found for reference
+      `&dyn ThemeSettingsProvider` in the current scope.
+      Right reason: the accessor 2.1 adds does not exist yet. WRONG reasons (fix the
+      test, do not weaken it): any error naming SettingsStore, LoadThemes, or a
+      macro/parse failure.
+      Secondary valid Red, once the trait method exists but the settings group does
+      not: `writing_zeo_radius_scale_changes_the_value_the_provider_returns` fails on
+      its own assertion (provider still returns 1.0, or the store rejects the `zeo`
+      key).
+    recorded: 2026-07-11
+    red_unrecorded: true            # v2 audit — see the header block
+    red_audit: >-
+      NOT written back by Run mode. What IS attested in deviations.yaml is a WRONG-reason Red
+      (E0599 on `SettingsStore::update_global`; `set_user_settings` returning
+      `SettingsParseResult`) — which this entry explicitly disqualifies. The right-reason Red
+      (`no method named zeo_radius_scale`) is unattested. Precedence holds by construction
+      (authored 7h before commit 74d0c5443a). The test is green today and its non-vacuity is
+      independently established: the four clamp tests the orchestrator ADDED (R1.7) were proven
+      falsifiable, and the file's font-size pin was repaired without touching an assertion.
+
+  - task: "2.2"
+    test_file: ".draft/authored-tests/fork/crates/ui/src/styles/radius_tests.rs"
+    target_path: "fork/crates/ui/src/styles/radius_tests.rs"
+    kind: unit
+    red_deferred: true
+    materialisation:
+      - "copy the file to its target path"
+      - "add `#[cfg(test)] mod radius_tests;` to fork/crates/ui/src/styles.rs"
+      - "add to fork/crates/ui/Cargo.toml [dev-dependencies]: settings = { workspace = true, features = [\"test-support\"] } and theme_settings.workspace = true (no cycle: neither depends on `ui`)"
+    command_to_run: "cd fork && cargo test -p ui radius"
+    expected_failure: >-
+      error[E0432]: unresolved import `crate::ZeoRadius` — no `ZeoRadius` in the root.
+      Right reason: crates/ui/src/styles/radius.rs does not exist yet. WRONG reasons:
+      an error naming DynamicSpacing, SettingsStore or theme_settings means the test
+      or the Cargo.toml wiring is broken.
+      The test that must fail LAST (and the reason this file exists):
+      `steps_scale_with_ui_font_size_not_with_a_fixed_16px_base` — an implementation
+      that hard-codes the 16px rem base compiles and passes every other assertion in
+      the file.
+    recorded: 2026-07-11
+    red_unrecorded: true            # v2 audit — see the header block
+    red_audit: >-
+      NOT written back by Run mode. Same pattern as 2.1: the attested failures are the
+      compile-blocking surface bugs this entry disqualifies, not the `E0432 unresolved import
+      crate::ZeoRadius` it demands. Precedence holds by construction. Non-vacuity of the key
+      test IS independently attested — deviations.yaml records the DynamicSpacing formula
+      confirmation (`px() = ui_font_size x ratio`, never `16 x ratio`) and states that
+      `steps_scale_with_ui_font_size_not_with_a_fixed_16px_base` passes, which is only
+      meaningful because the hard-coded-16 implementation would compile and pass everything else.
+
+  - task: "3.1"
+    test_file: ".draft/authored-tests/fork/crates/ui/src/styles/elevation_tests.rs"
+    target_path: "fork/crates/ui/src/styles/elevation_tests.rs"
+    kind: unit
+    covers_also: "3.2"
+    red_deferred: true
+    materialisation:
+      - "copy the file to its target path"
+      - "add `#[cfg(test)] mod elevation_tests;` to fork/crates/ui/src/styles.rs"
+      - "same two dev-dependencies as 2.2 (settings/test-support, theme_settings)"
+    command_to_run: "cd fork && cargo test -p ui elevation"
+    expected_failure: >-
+      error[E0599]: no method named `rim` found for enum `ElevationIndex`, and
+      error[E0432]: unresolved import `crate::ZeoRadius`.
+      Right reason: ElevationIndex::rim() (3.1) and the radius token (2.2) do not
+      exist yet. WRONG reasons: errors naming StyleRefinement, div or StyledExt.
+      NOTE: `peak_shadow_alpha_stays_at_or_below_12_percent` passes as soon as the
+      file compiles — Zed's existing stacks are already at 12% (elevation.rs:49-77).
+      It is a regression guard against `.shadow_lg()`, not a Red driver. Do not
+      "strengthen" it into something that fails today.
+    recorded: 2026-07-11
+    red_unrecorded: true            # v2 audit — see the header block
+    red_audit: >-
+      NOT written back by Run mode. Precedence holds by construction. **But this entry's
+      coverage claim (`covers_also: "3.2"`) was FALSE as authored** — the pre-authored file
+      contained precisely the `style.background.is_some()` assertion that tasks.md 3.2 forbids
+      in bold, and asserted nothing about D24. The orchestrator caught it and directed a NEW
+      test, `elevated_resolves_its_background_from_the_index`, which was then PROVEN NECESSARY
+      BY MUTATION: with the background hard-coded but radius and rim fixed — the exact
+      "looks done, renders flat" implementation — all five pre-authored tests pass and only the
+      new one fails. That mutation proof is stronger evidence of non-vacuity than a Red record
+      would have been, and it is attested in deviations.yaml.
+
+  - task: "5.1"
+    test_file: ".draft/authored-tests/fork/crates/theme_settings/tests/zeo_theme.rs"
+    target_path: "fork/crates/theme_settings/tests/zeo_theme.rs"
+    kind: integration
+    covers_also: "5.2"
+    red_deferred: true
+    materialisation:
+      - "copy the file to its target path (external test target — cargo auto-discovers tests/*.rs; no mod line)"
+      - "add to fork/crates/theme_settings/Cargo.toml [dev-dependencies]: assets.workspace = true"
+    command_to_run: "cd fork && cargo test -p theme_settings --test zeo_theme"
+    expected_failure: >-
+      An assertion failure, NOT a compile error — every symbol this file imports
+      already exists: panicked at 'themes/zeo/zeo.json does not exist yet (No such
+      file or directory)'.
+      Right reason: the theme has not been authored. A compile error here means the
+      dev-dependency or an import is wrong — fix that first, or the Red is
+      meaningless.
+      Second valid Red, after zeo.json lands but before 5.2 flips the default:
+      `default_json_theme_names_match_the_theme_family` fails with "One Dark" !=
+      "Zeo Dark" — the exact silent failure (fallback to One Dark, logged only) that
+      would otherwise ship a Zeo build rendering as Zed.
+    recorded: 2026-07-11
+    red_unrecorded: true            # v2 audit — see the header block
+    red_audit: >-
+      NOT written back by Run mode. Precedence holds by construction. **This file was the
+      LEAKIEST of the five, and the v2 validation found the hole its two earlier repairs missed.**
+      Run mode already had to ADD `modal_surface_is_a_real_luminance_step_above_elevated_in_both_variants`
+      (the D25 rung was unasserted). The validate-mode Auditor then found a SECOND, larger gap:
+      **the file never asserted the BORDER tokens at all**, so `border.variant` shipped at 1.00:1
+      against `elevated_surface` — an invisible hairline on all 71 re-skinned surfaces — with all
+      seven tests green. design.md had demanded the check ("boundaries clear 3:1... computable
+      directly from the theme JSON"); tasks.md dropped it in transcription; no test carried it.
+      Fixed by new sub-task 5.4 (R3.9/R3.10). Three independent holes in one pre-authored file is
+      a TEST-AUTHORING defect, not three coincidences — carry that into story 003.

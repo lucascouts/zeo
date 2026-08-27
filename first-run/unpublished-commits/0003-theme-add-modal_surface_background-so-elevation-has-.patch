@@ -1,0 +1,274 @@
+From 94dc80c3383c3f75841b8d109ffa171800b74c75 Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sat, 11 Jul 2026 23:56:16 -0300
+Subject: [PATCH 3/9] theme: add modal_surface_background so elevation has a
+ fourth step
+
+ElevationIndex::ElevatedSurface and ::ModalSurface both resolved to
+elevated_surface_background, so the modal had no colour to step to and a
+four-level ladder was unrepresentable. Adds modal_surface_background to
+ThemeColors, exposes it as `modal_surface.background` in the theme JSON, and
+points ModalSurface at it.
+
+Every existing theme leaves the field unset, so it falls back to
+elevated_surface_background at the refinement layer -- One, Ayu, Gruvbox and
+every user theme render exactly as they do today. Without that fallback an unset
+Hsla is transparent black, which would paint a black modal in every Zed theme;
+the tests pin both halves and fail against the naive implementation.
+
+This delivers the capability, not the step. The luminance ladder itself is theme
+data and belongs to the Zeo palette.
+
+Covers R2.1, R2.3.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ crates/settings_content/src/theme.rs |   6 ++
+ crates/theme/src/default_colors.rs   |   2 +
+ crates/theme/src/fallback_themes.rs  |   1 +
+ crates/theme/src/styles/colors.rs    |  24 ++++++
+ crates/theme_settings/src/schema.rs  | 115 ++++++++++++++++++++++++++-
+ 5 files changed, 144 insertions(+), 4 deletions(-)
+
+diff --git a/crates/settings_content/src/theme.rs b/crates/settings_content/src/theme.rs
+index 406c1ead91..51e45d490b 100644
+--- a/crates/settings_content/src/theme.rs
++++ b/crates/settings_content/src/theme.rs
+@@ -545,6 +545,12 @@ pub struct ThemeColorsContent {
+     #[serde(rename = "elevated_surface.background")]
+     pub elevated_surface_background: Option<String>,
+ 
++    /// Background color. Used for modal surfaces, like a dialog, alert, or the command palette.
++    ///
++    /// Falls back to `elevated_surface.background` when a theme does not define it.
++    #[serde(rename = "modal_surface.background")]
++    pub modal_surface_background: Option<String>,
++
+     /// Background Color. Used for grounded surfaces like a panel or tab.
+     #[serde(rename = "surface.background")]
+     pub surface_background: Option<String>,
+diff --git a/crates/theme/src/default_colors.rs b/crates/theme/src/default_colors.rs
+index b52e855f2b..e102306c70 100644
+--- a/crates/theme/src/default_colors.rs
++++ b/crates/theme/src/default_colors.rs
+@@ -57,6 +57,7 @@ impl ThemeColors {
+             border_transparent: system.transparent,
+             border_disabled: neutral().light().step_3(),
+             elevated_surface_background: neutral().light().step_2(),
++            modal_surface_background: neutral().light().step_2(),
+             surface_background: neutral().light().step_2(),
+             background: neutral().light().step_1(),
+             element_background: neutral().light().step_3(),
+@@ -210,6 +211,7 @@ impl ThemeColors {
+             border_transparent: system.transparent,
+             border_disabled: neutral().dark().step_3(),
+             elevated_surface_background: neutral().dark().step_2(),
++            modal_surface_background: neutral().dark().step_2(),
+             surface_background: neutral().dark().step_2(),
+             background: neutral().dark().step_1(),
+             element_background: neutral().dark().step_3(),
+diff --git a/crates/theme/src/fallback_themes.rs b/crates/theme/src/fallback_themes.rs
+index 2716eae0b2..8e7d89f28e 100644
+--- a/crates/theme/src/fallback_themes.rs
++++ b/crates/theme/src/fallback_themes.rs
+@@ -122,6 +122,7 @@ pub(crate) fn zed_default_dark() -> Theme {
+                 border_transparent: SystemColors::default().transparent,
+                 border_disabled: hsla(222.0 / 360., 11.6 / 100., 33.7 / 100., 1.0),
+                 elevated_surface_background: elevated_surface,
++                modal_surface_background: elevated_surface,
+                 surface_background: bg,
+                 background: bg,
+                 element_background: hsla(223.0 / 360., 13. / 100., 21. / 100., 1.0),
+diff --git a/crates/theme/src/styles/colors.rs b/crates/theme/src/styles/colors.rs
+index f9ebd441aa..da37bd1a5c 100644
+--- a/crates/theme/src/styles/colors.rs
++++ b/crates/theme/src/styles/colors.rs
+@@ -27,6 +27,11 @@ pub struct ThemeColors {
+     pub border_disabled: Hsla,
+     /// Border color. Used for elevated surfaces, like a context menu, popup, or dialog.
+     pub elevated_surface_background: Hsla,
++    /// Background Color. Used for modal surfaces, like a dialog, alert, or the command palette.
++    ///
++    /// This sits one step above [`ThemeColors::elevated_surface_background`]. Themes that do not
++    /// define it fall back to `elevated_surface_background`, so they render as they always have.
++    pub modal_surface_background: Hsla,
+     /// Background Color. Used for grounded surfaces like a panel or tab.
+     pub surface_background: Hsla,
+     /// Background Color. Used for the app background and blank panels or windows.
+@@ -671,6 +676,25 @@ mod tests {
+         assert_eq!(colors.background, green);
+     }
+ 
++    /// R2.3. `modal_surface_background` is new, so every theme that exists leaves it unset and
++    /// falls through to these base defaults. They must therefore land on exactly the elevated
++    /// surface: a `modal_surface_background` that defaults to anything else — least of all a
++    /// zeroed `Hsla`, which is transparent black — repaints every modal in every Zed theme.
++    #[test]
++    fn the_modal_surface_defaults_to_the_elevated_surface() {
++        for colors in [
++            ThemeColors::light(),
++            ThemeColors::dark(),
++            crate::fallback_themes::zed_default_dark().colors().clone(),
++        ] {
++            assert_eq!(
++                colors.modal_surface_background, colors.elevated_surface_background,
++                "the modal surface must default to the elevated surface"
++            );
++            assert_ne!(colors.modal_surface_background, gpui::hsla(0., 0., 0., 0.));
++        }
++    }
++
+     #[test]
+     fn deserialize_theme_colors_refinement_from_json() {
+         let colors: ThemeColorsRefinement = serde_json::from_value(json!({
+diff --git a/crates/theme_settings/src/schema.rs b/crates/theme_settings/src/schema.rs
+index 3f4a20adbf..17672b4d98 100644
+--- a/crates/theme_settings/src/schema.rs
++++ b/crates/theme_settings/src/schema.rs
+@@ -243,6 +243,10 @@ pub fn theme_colors_refinement(
+         .border
+         .as_ref()
+         .and_then(|color| try_parse_color(color).ok());
++    let elevated_surface_background = this
++        .elevated_surface_background
++        .as_ref()
++        .and_then(|color| try_parse_color(color).ok());
+     let editor_document_highlight_read_background = this
+         .editor_document_highlight_read_background
+         .as_ref()
+@@ -331,10 +335,12 @@ pub fn theme_colors_refinement(
+             .border_disabled
+             .as_ref()
+             .and_then(|color| try_parse_color(color).ok()),
+-        elevated_surface_background: this
+-            .elevated_surface_background
++        elevated_surface_background,
++        modal_surface_background: this
++            .modal_surface_background
+             .as_ref()
+-            .and_then(|color| try_parse_color(color).ok()),
++            .and_then(|color| try_parse_color(color).ok())
++            .or(elevated_surface_background),
+         surface_background: this
+             .surface_background
+             .as_ref()
+@@ -909,7 +915,8 @@ fn try_parse_color(color: &str) -> anyhow::Result<Hsla> {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use theme::StatusColorsRefinement;
++    use refineable::Refineable as _;
++    use theme::{StatusColorsRefinement, ThemeColors};
+ 
+     use super::{
+         StatusColorsContent, ThemeColorsContent, status_colors_refinement, theme_colors_refinement,
+@@ -1069,6 +1076,106 @@ mod tests {
+         }
+     }
+ 
++    fn refinement_of(colors: &ThemeColorsContent) -> theme::ThemeColorsRefinement {
++        theme_colors_refinement(
++            colors,
++            &status_colors_refinement(&StatusColorsContent::default()),
++            false,
++        )
++    }
++
++    #[test]
++    fn modal_surface_background_falls_back_to_elevated_surface_background() {
++        let refinement = refinement_of(&ThemeColorsContent {
++            elevated_surface_background: Some("#ff00ff".to_string()),
++            ..Default::default()
++        });
++
++        assert_eq!(
++            refinement.modal_surface_background,
++            Some(parse_color("#ff00ff"))
++        );
++        assert_eq!(
++            refinement.modal_surface_background,
++            refinement.elevated_surface_background
++        );
++    }
++
++    #[test]
++    fn explicit_modal_surface_background_takes_precedence_over_the_fallback() {
++        let refinement = refinement_of(&ThemeColorsContent {
++            elevated_surface_background: Some("#ff00ff".to_string()),
++            modal_surface_background: Some("#00ff00".to_string()),
++            ..Default::default()
++        });
++
++        assert_eq!(
++            refinement.modal_surface_background,
++            Some(parse_color("#00ff00"))
++        );
++        assert_eq!(
++            refinement.elevated_surface_background,
++            Some(parse_color("#ff00ff"))
++        );
++    }
++
++    /// R2.3. No theme in existence sets `modal_surface.background` — it did not exist until now
++    /// — so this is the path every shipped and user-installed theme takes. The colour the
++    /// renderer ends up reading must be that theme's *own* elevated surface: not the base
++    /// theme's, and above all not a defaulted `Hsla`, which is transparent black and would put
++    /// a black modal in front of every Zed user.
++    #[test]
++    fn a_theme_without_modal_surface_background_resolves_it_to_its_own_elevated_surface() {
++        let content = ThemeColorsContent {
++            elevated_surface_background: Some("#ff00ff".to_string()),
++            ..Default::default()
++        };
++
++        for mut colors in [ThemeColors::light(), ThemeColors::dark()] {
++            let base_elevated = colors.elevated_surface_background;
++            colors.refine(&refinement_of(&content));
++
++            assert_eq!(colors.elevated_surface_background, parse_color("#ff00ff"));
++            assert_eq!(
++                colors.modal_surface_background, colors.elevated_surface_background,
++                "an unset modal surface must resolve to the theme's own elevated surface"
++            );
++            assert_ne!(
++                colors.modal_surface_background, base_elevated,
++                "the fallback must follow the theme, not the base defaults"
++            );
++            assert_ne!(
++                colors.modal_surface_background,
++                gpui::hsla(0., 0., 0., 0.),
++                "a defaulted Hsla here is a black modal in every existing theme"
++            );
++        }
++    }
++
++    /// A theme that sets neither colour keeps whatever the base defaults say, so those two
++    /// defaults have to agree — otherwise such a theme's modals shift.
++    #[test]
++    fn a_theme_that_sets_neither_surface_keeps_the_base_defaults_in_agreement() {
++        for mut colors in [ThemeColors::light(), ThemeColors::dark()] {
++            colors.refine(&refinement_of(&ThemeColorsContent::default()));
++
++            assert_eq!(
++                colors.modal_surface_background,
++                colors.elevated_surface_background
++            );
++        }
++    }
++
++    #[test]
++    fn modal_surface_background_deserializes_from_its_theme_json_key() {
++        let content: ThemeColorsContent = serde_json::from_value(serde_json::json!({
++            "modal_surface.background": "#00ff00",
++        }))
++        .expect("theme colors content should deserialize");
++
++        assert_eq!(content.modal_surface_background.as_deref(), Some("#00ff00"));
++    }
++
+     #[test]
+     fn helix_jump_label_color_uses_theme_color_or_status_error() {
+         let status_error = try_parse_color("#e63333").expect("valid color");
+-- 
+2.55.0
+

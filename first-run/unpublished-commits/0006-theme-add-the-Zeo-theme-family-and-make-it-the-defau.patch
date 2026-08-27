@@ -1,0 +1,1360 @@
+From c8e8078c8bb700cdac2c42136d982e8d27308afe Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sun, 12 Jul 2026 00:42:12 -0300
+Subject: [PATCH 6/9] theme: add the Zeo theme family and make it the default
+
+Zeo's accent was literally Zed's `info` colour -- text.accent and info are the
+same string in both One variants -- so the brand had no independent hue at all.
+It is now Amethyst: #BD93F9 dark, #7C3AED light. Two hexes, because one cannot
+serve both modes at AA. In the light variant `info` is desaturated and rotated
+to 204 degrees, taking its separation from the accent from 35 to 59 degrees, so
+both variants share one hue architecture.
+
+The elevated surface had no background step whatsoever: elevated_surface and
+surface are byte-identical in One, so an "elevated" surface was separated from
+the one beneath it by nothing but a black drop shadow, which a dark canvas
+swallows. That is the mechanical cause of the flat look. Zeo ships a real
+four-rung ladder -- canvas, surface, elevated, modal -- each rung a step the eye
+can actually see, with modal_surface.background set so the top rung exists at
+all rather than falling back onto the one below it.
+
+Syntax is derived from One Dark and harmonised with the accent, not authored from
+scratch: code stays legible and familiar from minute one. One Light's indigo is
+retired -- it collides with the Amethyst and already failed AA at 3.84:1
+upstream.
+
+The theme is keyed by the `name` field inside the JSON, not by the filename. A
+mismatch with default.json does not fail the build, does not fail the app, and
+shows no error -- it silently falls back to One Dark, which would ship a Zeo
+build that looks exactly like Zed. The two strings are pinned against each other
+by a test. The file must also stay strict JSON: the bundled loader does not
+accept the comments the user-theme parser tolerates, and would fail the same
+silent way.
+
+Registration needs no code: themes are embedded by directory glob and discovered
+by listing. Every Zed theme remains selectable.
+
+Covers R2.1, R3.1-R3.8.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ Cargo.lock                               |   1 +
+ assets/settings/default.json             |   4 +-
+ assets/themes/zeo/zeo.json               | 837 +++++++++++++++++++++++
+ crates/theme_settings/Cargo.toml         |   4 +
+ crates/theme_settings/tests/zeo_theme.rs | 419 ++++++++++++
+ 5 files changed, 1263 insertions(+), 2 deletions(-)
+ create mode 100644 assets/themes/zeo/zeo.json
+ create mode 100644 crates/theme_settings/tests/zeo_theme.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index c64435d6e8..da85be7c6b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -18589,6 +18589,7 @@ name = "theme_settings"
+ version = "0.1.0"
+ dependencies = [
+  "anyhow",
++ "assets",
+  "collections",
+  "gpui",
+  "gpui_util",
+diff --git a/assets/settings/default.json b/assets/settings/default.json
+index b6c143664c..d161a74229 100644
+--- a/assets/settings/default.json
++++ b/assets/settings/default.json
+@@ -8,8 +8,8 @@
+   // - "dark": Use the theme indicated by the "dark" field
+   "theme": {
+     "mode": "system",
+-    "light": "One Light",
+-    "dark": "One Dark",
++    "light": "Zeo Light",
++    "dark": "Zeo Dark",
+   },
+   "icon_theme": "Zed (Default)",
+   // The name of a base set of key bindings to use.
+diff --git a/assets/themes/zeo/zeo.json b/assets/themes/zeo/zeo.json
+new file mode 100644
+index 0000000000..ee6c7a0492
+--- /dev/null
++++ b/assets/themes/zeo/zeo.json
+@@ -0,0 +1,837 @@
++{
++  "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
++  "name": "Zeo",
++  "author": "Zeo",
++  "themes": [
++    {
++      "name": "Zeo Dark",
++      "appearance": "dark",
++      "style": {
++        "border": "#524f62ff",
++        "border.variant": "#403d4dff",
++        "border.focused": "#bd93f9ff",
++        "border.selected": "#5b4a86ff",
++        "border.transparent": "#00000000",
++        "border.disabled": "#474555ff",
++        "elevated_surface.background": "#403d4fff",
++        "modal_surface.background": "#49465bff",
++        "surface.background": "#363443ff",
++        "background": "#2d2a37ff",
++        "element.background": "#363443ff",
++        "element.hover": "#403d4fff",
++        "element.active": "#49465bff",
++        "element.selected": "#49465bff",
++        "element.disabled": "#363443ff",
++        "drop_target.background": "#bd93f933",
++        "ghost_element.background": "#00000000",
++        "ghost_element.hover": "#403d4fff",
++        "ghost_element.active": "#49465bff",
++        "ghost_element.selected": "#49465bff",
++        "ghost_element.disabled": "#363443ff",
++        "text": "#e1e1e5ff",
++        "text.muted": "#a9a6b5ff",
++        "text.placeholder": "#817d93ff",
++        "text.disabled": "#817d93ff",
++        "text.accent": "#bd93f9ff",
++        "icon": "#e1e1e5ff",
++        "icon.muted": "#a9a6b5ff",
++        "icon.disabled": "#817d93ff",
++        "icon.placeholder": "#a9a6b5ff",
++        "icon.accent": "#bd93f9ff",
++        "status_bar.background": "#2d2a37ff",
++        "title_bar.background": "#2d2a37ff",
++        "title_bar.inactive_background": "#25232eff",
++        "toolbar.background": "#25232eff",
++        "tab_bar.background": "#363443ff",
++        "tab.inactive_background": "#363443ff",
++        "tab.active_background": "#25232eff",
++        "search.match_background": "#bd93f955",
++        "search.active_match_background": "#dfc18466",
++        "panel.background": "#363443ff",
++        "panel.focused_border": null,
++        "pane.focused_border": null,
++        "scrollbar.thumb.background": "#a9a6b54c",
++        "scrollbar.thumb.hover_background": "#403d4fff",
++        "scrollbar.thumb.border": "#403d4dff",
++        "scrollbar.track.background": "#00000000",
++        "scrollbar.track.border": "#403d4dff",
++        "editor.foreground": "#c3c0d2ff",
++        "editor.background": "#25232eff",
++        "editor.gutter.background": "#25232eff",
++        "editor.subheader.background": "#363443ff",
++        "editor.active_line.background": "#2d2a37bf",
++        "editor.highlighted_line.background": "#2d2a37ff",
++        "editor.line_number": "#5b5870",
++        "editor.active_line_number": "#e1e1e5ff",
++        "editor.hover_line_number": "#a9a6b5ff",
++        "editor.invisible": "#5b5870",
++        "editor.wrap_guide": "#e1e1e50d",
++        "editor.active_wrap_guide": "#e1e1e51a",
++        "editor.document_highlight.read_background": "#bd93f91a",
++        "editor.document_highlight.write_background": "#a9a6b540",
++        "terminal.background": "#25232eff",
++        "terminal.foreground": "#c3c0d2ff",
++        "terminal.bright_foreground": "#e1e1e5ff",
++        "terminal.dim_foreground": "#817d93ff",
++        "terminal.ansi.black": "#25232eff",
++        "terminal.ansi.bright_black": "#6b6880ff",
++        "terminal.ansi.dim_black": "#363443ff",
++        "terminal.ansi.red": "#e06c75ff",
++        "terminal.ansi.bright_red": "#ea858bff",
++        "terminal.ansi.dim_red": "#a7545aff",
++        "terminal.ansi.green": "#98c379ff",
++        "terminal.ansi.bright_green": "#aad581ff",
++        "terminal.ansi.dim_green": "#6d8f59ff",
++        "terminal.ansi.yellow": "#e5c07bff",
++        "terminal.ansi.bright_yellow": "#ffd885ff",
++        "terminal.ansi.dim_yellow": "#b8985bff",
++        "terminal.ansi.blue": "#61afefff",
++        "terminal.ansi.bright_blue": "#85c1ffff",
++        "terminal.ansi.dim_blue": "#457cadff",
++        "terminal.ansi.magenta": "#bd93f9ff",
++        "terminal.ansi.bright_magenta": "#d7b6ffff",
++        "terminal.ansi.dim_magenta": "#8a68b8ff",
++        "terminal.ansi.cyan": "#56b6c2ff",
++        "terminal.ansi.bright_cyan": "#6ed5deff",
++        "terminal.ansi.dim_cyan": "#3c818aff",
++        "terminal.ansi.white": "#a9a6b5ff",
++        "terminal.ansi.bright_white": "#e1e1e5ff",
++        "terminal.ansi.dim_white": "#817d93ff",
++        "link_text.hover": "#bd93f9ff",
++        "version_control.added": "#27a657ff",
++        "version_control.modified": "#d3b020ff",
++        "version_control.word_added": "#2ea04859",
++        "version_control.word_deleted": "#78081bcc",
++        "version_control.deleted": "#e06c76ff",
++        "version_control.conflict_marker.ours": "#a1c1811a",
++        "version_control.conflict_marker.theirs": "#74ade81a",
++        "conflict": "#dfc184ff",
++        "conflict.background": "#dfc1841a",
++        "conflict.border": "#5d4c2fff",
++        "created": "#a1c181ff",
++        "created.background": "#a1c1811a",
++        "created.border": "#38482fff",
++        "deleted": "#d07277ff",
++        "deleted.background": "#d072771a",
++        "deleted.border": "#4c2b2cff",
++        "error": "#d07277ff",
++        "error.background": "#d072771a",
++        "error.border": "#4c2b2cff",
++        "hidden": "#817d93ff",
++        "hidden.background": "#817d931a",
++        "hidden.border": "#474555ff",
++        "hint": "#7f8ba6ff",
++        "hint.background": "#7f8ba61a",
++        "hint.border": "#3c4a63ff",
++        "ignored": "#817d93ff",
++        "ignored.background": "#817d931a",
++        "ignored.border": "#524f62ff",
++        "info": "#74ade8ff",
++        "info.background": "#74ade81a",
++        "info.border": "#31456bff",
++        "modified": "#dfc184ff",
++        "modified.background": "#dfc1841a",
++        "modified.border": "#5d4c2fff",
++        "predictive": "#5f6a87ff",
++        "predictive.background": "#5f6a871a",
++        "predictive.border": "#3c4a63ff",
++        "renamed": "#74ade8ff",
++        "renamed.background": "#74ade81a",
++        "renamed.border": "#31456bff",
++        "success": "#a1c181ff",
++        "success.background": "#a1c1811a",
++        "success.border": "#38482fff",
++        "unreachable": "#a9a6b5ff",
++        "unreachable.background": "#a9a6b51a",
++        "unreachable.border": "#524f62ff",
++        "warning": "#dfc184ff",
++        "warning.background": "#dfc1841a",
++        "warning.border": "#5d4c2fff",
++        "players": [
++          {
++            "cursor": "#bd93f9ff",
++            "background": "#bd93f9ff",
++            "selection": "#bd93f93d"
++          },
++          {
++            "cursor": "#74ade8ff",
++            "background": "#74ade8ff",
++            "selection": "#74ade83d"
++          },
++          {
++            "cursor": "#6eb4bfff",
++            "background": "#6eb4bfff",
++            "selection": "#6eb4bf3d"
++          },
++          {
++            "cursor": "#a1c181ff",
++            "background": "#a1c181ff",
++            "selection": "#a1c1813d"
++          },
++          {
++            "cursor": "#dfc184ff",
++            "background": "#dfc184ff",
++            "selection": "#dfc1843d"
++          },
++          {
++            "cursor": "#bf956aff",
++            "background": "#bf956aff",
++            "selection": "#bf956a3d"
++          },
++          {
++            "cursor": "#d07277ff",
++            "background": "#d07277ff",
++            "selection": "#d072773d"
++          },
++          {
++            "cursor": "#8f7fd6ff",
++            "background": "#8f7fd6ff",
++            "selection": "#8f7fd63d"
++          }
++        ],
++        "syntax": {
++          "attribute": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "boolean": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "comment": {
++            "color": "#64617aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "comment.doc": {
++            "color": "#8d8aa2ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "constant": {
++            "color": "#dfc184ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "constructor": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "diff.minus": {
++            "color": "#d07277ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "diff.plus": {
++            "color": "#a1c181ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "embedded": {
++            "color": "#e1e1e5ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "emphasis": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "emphasis.strong": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": 700
++          },
++          "enum": {
++            "color": "#6eb4bfff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "function": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "hint": {
++            "color": "#7f8ba6ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "keyword": {
++            "color": "#bd93f9ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "label": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "link_text": {
++            "color": "#74ade8ff",
++            "font_style": "italic",
++            "font_weight": null
++          },
++          "link_uri": {
++            "color": "#6eb4bfff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "namespace": {
++            "color": "#e1e1e5ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "number": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "operator": {
++            "color": "#6eb4bfff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "predictive": {
++            "color": "#5f6a87ff",
++            "font_style": "italic",
++            "font_weight": null
++          },
++          "preproc": {
++            "color": "#bd93f9ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "primary": {
++            "color": "#c3c0d2ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "property": {
++            "color": "#d07277ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation": {
++            "color": "#c3c0d2ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.bracket": {
++            "color": "#a9a6b5ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.delimiter": {
++            "color": "#a9a6b5ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.list_marker": {
++            "color": "#d07277ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.markup": {
++            "color": "#d07277ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.special": {
++            "color": "#b1574bff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "selector": {
++            "color": "#dfc184ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "selector.pseudo": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string": {
++            "color": "#a1c181ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.escape": {
++            "color": "#8d8aa2ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.regex": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.special": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.special.symbol": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "tag": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "text.literal": {
++            "color": "#a1c181ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "title": {
++            "color": "#d07277ff",
++            "font_style": null,
++            "font_weight": 400
++          },
++          "type": {
++            "color": "#6eb4bfff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variable": {
++            "color": "#c3c0d2ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variable.special": {
++            "color": "#bf956aff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variant": {
++            "color": "#74ade8ff",
++            "font_style": null,
++            "font_weight": null
++          }
++        }
++      }
++    },
++    {
++      "name": "Zeo Light",
++      "appearance": "light",
++      "style": {
++        "border": "#cecbd8ff",
++        "border.variant": "#e4e3ebff",
++        "border.focused": "#7c3aedff",
++        "border.selected": "#c9b4f5ff",
++        "border.transparent": "#00000000",
++        "border.disabled": "#dad9e2ff",
++        "elevated_surface.background": "#f6f5f9ff",
++        "modal_surface.background": "#ffffffff",
++        "surface.background": "#edecf4ff",
++        "background": "#dfdde9ff",
++        "element.background": "#edecf4ff",
++        "element.hover": "#e4e3ebff",
++        "element.active": "#d5d3e0ff",
++        "element.selected": "#d5d3e0ff",
++        "element.disabled": "#edecf4ff",
++        "drop_target.background": "#7c3aed33",
++        "ghost_element.background": "#00000000",
++        "ghost_element.hover": "#e4e3ebff",
++        "ghost_element.active": "#d5d3e0ff",
++        "ghost_element.selected": "#d5d3e0ff",
++        "ghost_element.disabled": "#edecf4ff",
++        "text": "#2b2836ff",
++        "text.muted": "#5c596cff",
++        "text.placeholder": "#827f96ff",
++        "text.disabled": "#827f96ff",
++        "text.accent": "#7c3aedff",
++        "icon": "#2b2836ff",
++        "icon.muted": "#5c596cff",
++        "icon.disabled": "#827f96ff",
++        "icon.placeholder": "#5c596cff",
++        "icon.accent": "#7c3aedff",
++        "status_bar.background": "#dfdde9ff",
++        "title_bar.background": "#dfdde9ff",
++        "title_bar.inactive_background": "#edecf4ff",
++        "toolbar.background": "#fbfbfdff",
++        "tab_bar.background": "#edecf4ff",
++        "tab.inactive_background": "#edecf4ff",
++        "tab.active_background": "#fbfbfdff",
++        "search.match_background": "#7c3aed40",
++        "search.active_match_background": "#956c1066",
++        "panel.background": "#edecf4ff",
++        "panel.focused_border": null,
++        "pane.focused_border": null,
++        "scrollbar.thumb.background": "#5c596c4c",
++        "scrollbar.thumb.hover_background": "#e4e3ebff",
++        "scrollbar.thumb.border": "#e4e3ebff",
++        "scrollbar.track.background": "#00000000",
++        "scrollbar.track.border": "#e4e3ebff",
++        "editor.foreground": "#2b2836ff",
++        "editor.background": "#fbfbfdff",
++        "editor.gutter.background": "#fbfbfdff",
++        "editor.subheader.background": "#edecf4ff",
++        "editor.active_line.background": "#edecf4bf",
++        "editor.highlighted_line.background": "#edecf4ff",
++        "editor.line_number": "#b3b0c4",
++        "editor.active_line_number": "#2b2836ff",
++        "editor.hover_line_number": "#5c596cff",
++        "editor.invisible": "#b3b0c4",
++        "editor.wrap_guide": "#2b28360d",
++        "editor.active_wrap_guide": "#2b28361a",
++        "editor.document_highlight.read_background": "#7c3aed1a",
++        "editor.document_highlight.write_background": "#5c596c30",
++        "terminal.background": "#fbfbfdff",
++        "terminal.foreground": "#2b2836ff",
++        "terminal.bright_foreground": "#2b2836ff",
++        "terminal.dim_foreground": "#827f96ff",
++        "terminal.ansi.black": "#2b2836ff",
++        "terminal.ansi.bright_black": "#5c596cff",
++        "terminal.ansi.dim_black": "#827f96ff",
++        "terminal.ansi.red": "#c64a39ff",
++        "terminal.ansi.bright_red": "#d9604fff",
++        "terminal.ansi.dim_red": "#9c2b26ff",
++        "terminal.ansi.green": "#49803bff",
++        "terminal.ansi.bright_green": "#5fa04cff",
++        "terminal.ansi.dim_green": "#2b6927ff",
++        "terminal.ansi.yellow": "#956c10ff",
++        "terminal.ansi.bright_yellow": "#c18401ff",
++        "terminal.ansi.dim_yellow": "#7d5a0eff",
++        "terminal.ansi.blue": "#2b6cb0ff",
++        "terminal.ansi.bright_blue": "#3a83cdff",
++        "terminal.ansi.dim_blue": "#1f4f80ff",
++        "terminal.ansi.magenta": "#7c3aedff",
++        "terminal.ansi.bright_magenta": "#9560f0ff",
++        "terminal.ansi.dim_magenta": "#5b2ab0ff",
++        "terminal.ansi.cyan": "#1f7d8cff",
++        "terminal.ansi.bright_cyan": "#2b96a8ff",
++        "terminal.ansi.dim_cyan": "#165a65ff",
++        "terminal.ansi.white": "#edecf4ff",
++        "terminal.ansi.bright_white": "#ffffffff",
++        "terminal.ansi.dim_white": "#cecbd8ff",
++        "link_text.hover": "#7c3aedff",
++        "version_control.added": "#27a657ff",
++        "version_control.modified": "#d3b020ff",
++        "version_control.word_added": "#2ea04859",
++        "version_control.word_deleted": "#f85149cc",
++        "version_control.deleted": "#e06c76ff",
++        "version_control.conflict_marker.ours": "#49803b1a",
++        "version_control.conflict_marker.theirs": "#2b6cb01a",
++        "conflict": "#956c10ff",
++        "conflict.background": "#faf2e6ff",
++        "conflict.border": "#f4e7d1ff",
++        "created": "#49803bff",
++        "created.background": "#dfeadbff",
++        "created.border": "#c8dcc1ff",
++        "deleted": "#c64a39ff",
++        "deleted.background": "#fbdfd9ff",
++        "deleted.border": "#f6c6bdff",
++        "error": "#c64a39ff",
++        "error.background": "#fbdfd9ff",
++        "error.border": "#f6c6bdff",
++        "hidden": "#827f96ff",
++        "hidden.background": "#dfdde9ff",
++        "hidden.border": "#dad9e2ff",
++        "hint": "#6a6790ff",
++        "hint.background": "#e6e2f8ff",
++        "hint.border": "#d3cbf2ff",
++        "ignored": "#827f96ff",
++        "ignored.background": "#dfdde9ff",
++        "ignored.border": "#cecbd8ff",
++        "info": "#3d7ea8ff",
++        "info.background": "#dfeaf3ff",
++        "info.border": "#c2d9e8ff",
++        "modified": "#956c10ff",
++        "modified.background": "#faf2e6ff",
++        "modified.border": "#f4e7d1ff",
++        "predictive": "#918fafff",
++        "predictive.background": "#e6e2f8ff",
++        "predictive.border": "#d3cbf2ff",
++        "renamed": "#3d7ea8ff",
++        "renamed.background": "#dfeaf3ff",
++        "renamed.border": "#c2d9e8ff",
++        "success": "#49803bff",
++        "success.background": "#dfeadbff",
++        "success.border": "#c8dcc1ff",
++        "unreachable": "#5c596cff",
++        "unreachable.background": "#dfdde9ff",
++        "unreachable.border": "#cecbd8ff",
++        "warning": "#956c10ff",
++        "warning.background": "#faf2e6ff",
++        "warning.border": "#f4e7d1ff",
++        "players": [
++          {
++            "cursor": "#7c3aedff",
++            "background": "#7c3aedff",
++            "selection": "#7c3aed3d"
++          },
++          {
++            "cursor": "#2b6cb0ff",
++            "background": "#2b6cb0ff",
++            "selection": "#2b6cb03d"
++          },
++          {
++            "cursor": "#1f7d8cff",
++            "background": "#1f7d8cff",
++            "selection": "#1f7d8c3d"
++          },
++          {
++            "cursor": "#49803bff",
++            "background": "#49803bff",
++            "selection": "#49803b3d"
++          },
++          {
++            "cursor": "#956c10ff",
++            "background": "#956c10ff",
++            "selection": "#956c103d"
++          },
++          {
++            "cursor": "#a06522ff",
++            "background": "#a06522ff",
++            "selection": "#a065223d"
++          },
++          {
++            "cursor": "#c64a39ff",
++            "background": "#c64a39ff",
++            "selection": "#c64a393d"
++          },
++          {
++            "cursor": "#6544b5ff",
++            "background": "#6544b5ff",
++            "selection": "#6544b53d"
++          }
++        ],
++        "syntax": {
++          "attribute": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "boolean": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "comment": {
++            "color": "#7e7b95ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "comment.doc": {
++            "color": "#6e6b81ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "constant": {
++            "color": "#956c10ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "constructor": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "diff.minus": {
++            "color": "#c64a39ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "diff.plus": {
++            "color": "#49803bff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "embedded": {
++            "color": "#2b2836ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "emphasis": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "emphasis.strong": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": 700
++          },
++          "enum": {
++            "color": "#1f7d8cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "function": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "hint": {
++            "color": "#6a6790ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "keyword": {
++            "color": "#7c3aedff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "label": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "link_text": {
++            "color": "#2b6cb0ff",
++            "font_style": "italic",
++            "font_weight": null
++          },
++          "link_uri": {
++            "color": "#1f7d8cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "namespace": {
++            "color": "#2b2836ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "number": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "operator": {
++            "color": "#1f7d8cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "predictive": {
++            "color": "#918fafff",
++            "font_style": "italic",
++            "font_weight": null
++          },
++          "preproc": {
++            "color": "#7c3aedff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "primary": {
++            "color": "#2b2836ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "property": {
++            "color": "#c64a39ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation": {
++            "color": "#2b2836ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.bracket": {
++            "color": "#5c596cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.delimiter": {
++            "color": "#5c596cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.list_marker": {
++            "color": "#c64a39ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.markup": {
++            "color": "#c64a39ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "punctuation.special": {
++            "color": "#b92b46ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "selector": {
++            "color": "#49803bff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "selector.pseudo": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string": {
++            "color": "#49803bff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.escape": {
++            "color": "#6e6b81ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.regex": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.special": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "string.special.symbol": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "tag": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "text.literal": {
++            "color": "#49803bff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "title": {
++            "color": "#c64a39ff",
++            "font_style": null,
++            "font_weight": 400
++          },
++          "type": {
++            "color": "#1f7d8cff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variable": {
++            "color": "#2b2836ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variable.special": {
++            "color": "#a06522ff",
++            "font_style": null,
++            "font_weight": null
++          },
++          "variant": {
++            "color": "#2b6cb0ff",
++            "font_style": null,
++            "font_weight": null
++          }
++        }
++      }
++    }
++  ]
++}
+diff --git a/crates/theme_settings/Cargo.toml b/crates/theme_settings/Cargo.toml
+index dfe4fa0f79..089c8633f2 100644
+--- a/crates/theme_settings/Cargo.toml
++++ b/crates/theme_settings/Cargo.toml
+@@ -35,3 +35,7 @@ uuid.workspace = true
+ [dev-dependencies]
+ gpui = { workspace = true, features = ["test-support"] }
+ settings = { workspace = true, features = ["test-support"] }
++
++assets.workspace = true
++serde_json.workspace = true
++serde_json_lenient.workspace = true
+\ No newline at end of file
+diff --git a/crates/theme_settings/tests/zeo_theme.rs b/crates/theme_settings/tests/zeo_theme.rs
+new file mode 100644
+index 0000000000..ab77a47d73
+--- /dev/null
++++ b/crates/theme_settings/tests/zeo_theme.rs
+@@ -0,0 +1,419 @@
++//! Integration tests for the Zeo theme family (story 002, sub-tasks 5.1 and 5.2 —
++//! R2.1 (data half), R3.2, R3.3, R3.4, R3.5, R3.6, R3.7).
++//!
++//! ## Materialisation (executor — do this BEFORE authoring `zeo.json`)
++//!
++//! 1. Copy this file to `fork/crates/theme_settings/tests/zeo_theme.rs`.
++//!    It is an external test target: cargo discovers `tests/*.rs` automatically,
++//!    so there is no `mod` line to add anywhere.
++//! 2. Add one dev-dependency to `fork/crates/theme_settings/Cargo.toml`:
++//!
++//!        [dev-dependencies]
++//!        assets.workspace = true
++//!
++//!    It is needed because `theme_registration_requires_no_code` loads the themes
++//!    through the REAL asset embedder (`crates/assets/src/assets.rs:7-13`), which
++//!    is the mechanism D10 claims makes the theme zero-code. A test that inserted
++//!    the theme into the registry by hand would prove nothing about that claim,
++//!    and would still pass if `zeo.json` were dropped in the wrong directory.
++//! 3. Run: `cd fork && cargo test -p theme_settings --test zeo_theme`
++//!    (`cd fork` is mandatory — see `docs/BUILD.md:26-31`.)
++//!
++//! ## Expected Red (confirm this BEFORE implementing — do not skip)
++//!
++//! An assertion failure at the very first step, not a compile error — everything
++//! this file imports already exists:
++//!
++//!     panicked at 'assets/themes/zeo/zeo.json does not exist yet
++//!     (No such file or directory)'
++//!
++//! That is the right failure: the theme has not been authored. After `zeo.json`
++//! lands but before `default.json` is flipped (5.2), `default_json_theme_names_
++//! match_the_theme_family` fails instead, with `"One Dark" != "Zeo Dark"` — also
++//! valid Red, and the exact failure that stands between Zeo and shipping a build
++//! that silently renders as Zed.
++//!
++//! ## Why this file carries R2.1
++//!
++//! `ElevationIndex::bg()` reads `elevated_surface_background` from the *active
++//! theme* (`crates/ui/src/styles/elevation.rs:89-90`). The "elevated surface has
++//! no background step" defect is therefore a **data** defect (`one.json:16-17`
++//! dark, `:430-431` light), and no unit test in `crates/ui` can assert its fix —
++//! a `ui` test runs against One Dark, where the defect is still present by design.
++//! The luminance step is asserted HERE, against the Zeo palette, or nowhere.
++
++use std::path::{Path, PathBuf};
++
++use gpui::{Rgba, TestAppContext};
++use settings::SettingsStore;
++use theme::{AppearanceContent, ThemeRegistry};
++use theme_settings::{ThemeContent, ThemeFamilyContent};
++
++/// WCAG 2.x AA for normal text (D20's contrast floor).
++const AA_CONTRAST: f32 = 4.5;
++
++/// Amethyst (D13). Two hexes, one per mode: a single hex cannot serve both — the
++/// maths in design.md §Accent rules it out.
++const ACCENT_DARK: &str = "#BD93F9";
++const ACCENT_LIGHT: &str = "#7C3AED";
++
++/// A "step" that a human eye can actually see. Zed's dead step is +0.2% relative
++/// luminance (`#2e343e` -> `#2f343e`); anything of that order is the defect, not
++/// a fix.
++const MIN_LUMINANCE_STEP: f32 = 0.01;
++
++fn repo_asset(relative: &str) -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("../../assets")
++        .join(relative)
++}
++
++fn read_asset(relative: &str) -> Vec<u8> {
++    let path = repo_asset(relative);
++    match std::fs::read(&path) {
++        Ok(bytes) => bytes,
++        Err(error) => panic!("{relative} does not exist yet ({error})"),
++    }
++}
++
++fn zeo_family() -> ThemeFamilyContent {
++    let bytes = read_asset("themes/zeo/zeo.json");
++    match theme_settings::deserialize_user_theme(&bytes) {
++        Ok(family) => family,
++        Err(error) => panic!(
++            "assets/themes/zeo/zeo.json must deserialise into ThemeFamilyContent \
++             (this is the same parse the app performs at startup, and it fails \
++             SILENTLY there — it only logs): {error}"
++        ),
++    }
++}
++
++fn variant<'a>(family: &'a ThemeFamilyContent, name: &str) -> &'a ThemeContent {
++    match family.themes.iter().find(|theme| theme.name == name) {
++        Some(theme) => theme,
++        None => panic!(
++            "the Zeo family must contain the variant {name:?}; it contains {:?}",
++            family
++                .themes
++                .iter()
++                .map(|theme| theme.name.as_str())
++                .collect::<Vec<_>>()
++        ),
++    }
++}
++
++fn color(label: &str, value: &Option<String>) -> Rgba {
++    let Some(value) = value else {
++        panic!("{label} is not set in the Zeo palette");
++    };
++    match Rgba::try_from(value.as_str()) {
++        Ok(rgba) => rgba,
++        Err(error) => panic!("{label} is not a parseable colour ({value:?}): {error}"),
++    }
++}
++
++/// WCAG relative luminance (sRGB), computed straight from the theme JSON — no
++/// rendering needed, which is why the contrast floor can be a cheap test rather
++/// than an eyeball on a screenshot.
++fn relative_luminance(color: Rgba) -> f32 {
++    fn linearize(channel: f32) -> f32 {
++        if channel <= 0.03928 {
++            channel / 12.92
++        } else {
++            ((channel + 0.055) / 1.055).powf(2.4)
++        }
++    }
++
++    0.2126 * linearize(color.r) + 0.7152 * linearize(color.g) + 0.0722 * linearize(color.b)
++}
++
++fn contrast_ratio(foreground: Rgba, background: Rgba) -> f32 {
++    let (a, b) = (
++        relative_luminance(foreground),
++        relative_luminance(background),
++    );
++    let (lighter, darker) = if a >= b { (a, b) } else { (b, a) };
++    (lighter + 0.05) / (darker + 0.05)
++}
++
++fn same_color(a: Rgba, b: Rgba) -> bool {
++    let close = |x: f32, y: f32| (x - y).abs() < 1. / 512.;
++    close(a.r, b.r) && close(a.g, b.g) && close(a.b, b.b) && close(a.a, b.a)
++}
++
++// --- Parse and registration (R3.2) -------------------------------------------
++
++#[test]
++fn zeo_json_deserialises_and_declares_both_variants() {
++    let family = zeo_family();
++
++    assert_eq!(family.name, "Zeo", "the family name is the Zeo brand");
++
++    let dark = variant(&family, "Zeo Dark");
++    let light = variant(&family, "Zeo Light");
++
++    assert_eq!(dark.appearance, AppearanceContent::Dark);
++    assert_eq!(light.appearance, AppearanceContent::Light);
++    assert_eq!(
++        family.themes.len(),
++        2,
++        "the family ships exactly the two variants the default theme block names"
++    );
++}
++
++/// D10: themes are embedded by directory glob and discovered by listing, so the
++/// theme is zero-code — but only if the file sits where the glob looks. This test
++/// goes through the real embedder, so a `zeo.json` in the wrong directory fails
++/// here instead of at a user's first launch.
++#[gpui::test]
++fn both_variants_register_with_no_code_change(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let settings_store = SettingsStore::test(cx);
++        cx.set_global(settings_store);
++        theme_settings::init(theme::LoadThemes::All(Box::new(assets::Assets)), cx);
++    });
++
++    cx.update(|cx| {
++        let registry = ThemeRegistry::default_global(cx);
++
++        for name in ["Zeo Dark", "Zeo Light"] {
++            assert!(
++                registry.get(name).is_ok(),
++                "{name} must be discoverable in the ThemeRegistry after bundled-theme \
++                 loading — if it is not, the app falls back to One Dark and only LOGS \
++                 (theme_settings.rs:171-181)"
++            );
++        }
++
++        // R3.7 — expand, don't replace. Nothing Zed shipped is removed.
++        for name in ["One Dark", "One Light"] {
++            assert!(
++                registry.get(name).is_ok(),
++                "{name} must remain selectable — story 002 adds a theme, it does not \
++                 remove any (R3.7)"
++            );
++        }
++    });
++}
++
++// --- The two research defects (R3.3, R3.4, R2.1) ------------------------------
++
++/// Finding 1: today Zeo's accent IS Zed's `info` colour — `text.accent` and `info`
++/// are byte-identical in both modes (`one.json:34`=`:128`, `:448`=`:540`). The
++/// accent has no independent identity. Without this test, a future edit can
++/// silently regress it.
++#[test]
++fn text_accent_is_distinct_from_info_in_both_variants() {
++    let family = zeo_family();
++
++    for (name, expected_hex) in [("Zeo Dark", ACCENT_DARK), ("Zeo Light", ACCENT_LIGHT)] {
++        let style = &variant(&family, name).style;
++
++        let accent = color(&format!("{name}: text.accent"), &style.colors.text_accent);
++        let info = color(&format!("{name}: info"), &style.status.info);
++
++        assert!(
++            !same_color(accent, info),
++            "{name}: text.accent must NOT be the `info` colour (D13, R3.3). This is \
++             research finding 1 — the defect this story exists to fix — and it is \
++             invisible to every other test."
++        );
++
++        let expected = match Rgba::try_from(expected_hex) {
++            Ok(rgba) => rgba,
++            Err(error) => panic!("bad expectation in the test itself: {error}"),
++        };
++        assert!(
++            same_color(accent, expected),
++            "{name}: text.accent must be Amethyst {expected_hex} (D13) — the hue was \
++             chosen for AA contrast in both modes AND for hue separation from the \
++             error/warning/success/info bands the editor already needs"
++        );
++    }
++}
++
++/// Finding 2, and the mechanical cause of the flat look: an "elevated" surface
++/// gets NO background step at all (`one.json:16-17` dark, `:430-431` light),
++/// leaving a black drop shadow as its only cue — which a dark canvas swallows.
++///
++/// This is R2.1's data half, and this test is the ONLY place it can live.
++#[test]
++fn elevated_surface_is_a_real_luminance_step_above_surface_in_both_variants() {
++    let family = zeo_family();
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++
++        let background = color(
++            &format!("{name}: background"),
++            &style.colors.background,
++        );
++        let surface = color(
++            &format!("{name}: surface.background"),
++            &style.colors.surface_background,
++        );
++        let elevated = color(
++            &format!("{name}: elevated_surface.background"),
++            &style.colors.elevated_surface_background,
++        );
++
++        assert!(
++            !same_color(elevated, surface),
++            "{name}: elevated_surface.background must differ from surface.background \
++             (R3.4). Today they are byte-identical, which is why Zed's elevation reads \
++             as flat — research finding 2."
++        );
++
++        let step = (relative_luminance(elevated) - relative_luminance(surface)).abs();
++        assert!(
++            step >= MIN_LUMINANCE_STEP,
++            "{name}: the elevated step is {step:.4} relative luminance — that is not a \
++             step, it is Zed's dead +0.002 by another name. An elevated surface must be \
++             separated by a VISIBLE background step and a hairline, not by a shadow \
++             (R2.1, D7)."
++        );
++
++        let ladder_step =
++            (relative_luminance(surface) - relative_luminance(background)).abs();
++        assert!(
++            ladder_step >= MIN_LUMINANCE_STEP,
++            "{name}: surface.background must also sit a visible step off the canvas \
++             ({ladder_step:.4}) — the ladder is e0 → e1 → e2, and a broken bottom rung \
++             is as flat as a broken top one"
++        );
++    }
++}
++
++/// The top rung (D25). `modal_surface_background` was added by sub-task 3.0 for
++/// exactly one reason: before it, `ElevationIndex::ElevatedSurface` and
++/// `::ModalSurface` both resolved to `elevated_surface_background`, so a
++/// four-level ladder could not be *represented*, never mind rendered.
++///
++/// The field falls back to `elevated_surface.background` when a theme omits it —
++/// a fallback that exists to protect *Zed's* themes, which predate the field. If
++/// Zeo omits it, that fallback silently collapses e3 onto e2 and Zeo ships a
++/// three-level ladder with a green suite. The tests above cannot see this: they
++/// stop at `elevated`. Hence this one.
++#[test]
++fn modal_surface_is_a_real_luminance_step_above_elevated_in_both_variants() {
++    let family = zeo_family();
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++
++        assert!(
++            style.colors.modal_surface_background.is_some(),
++            "{name}: modal_surface.background must be SET explicitly. Leaving it \
++             absent is not a neutral choice — it falls back to \
++             elevated_surface.background (theme.rs:548-552), which collapses e3 onto \
++             e2 and ships a three-level ladder silently, with every other test still \
++             green (D25)."
++        );
++
++        let elevated = color(
++            &format!("{name}: elevated_surface.background"),
++            &style.colors.elevated_surface_background,
++        );
++        let modal = color(
++            &format!("{name}: modal_surface.background"),
++            &style.colors.modal_surface_background,
++        );
++
++        assert!(
++            !same_color(modal, elevated),
++            "{name}: modal_surface.background must differ from \
++             elevated_surface.background — setting it to the same colour is the \
++             fallback written out by hand, not a fix"
++        );
++
++        let step = (relative_luminance(modal) - relative_luminance(elevated)).abs();
++        assert!(
++            step >= MIN_LUMINANCE_STEP,
++            "{name}: the modal step is {step:.4} relative luminance and must clear \
++             {MIN_LUMINANCE_STEP} — the same floor every other rung clears. A modal is \
++             the furthest thing from the canvas the app can show; if it does not read \
++             as raised above an elevated surface, the ladder has no top (D7, R2.1)."
++        );
++    }
++}
++
++// --- The contrast floor (R3.5) ------------------------------------------------
++
++#[test]
++fn the_accent_clears_wcag_aa_against_the_editor_background_in_both_variants() {
++    let family = zeo_family();
++
++    for name in ["Zeo Dark", "Zeo Light"] {
++        let style = &variant(&family, name).style;
++
++        let accent = color(&format!("{name}: text.accent"), &style.colors.text_accent);
++        let editor = color(
++            &format!("{name}: editor.background"),
++            &style.colors.editor_background,
++        );
++
++        let ratio = contrast_ratio(accent, editor);
++        assert!(
++            ratio >= AA_CONTRAST,
++            "{name}: the accent scores {ratio:.2}:1 against the editor background and \
++             must clear {AA_CONTRAST}:1 (R3.5). Prism Teal was rejected for exactly this \
++             failure at 3.59:1 — an accent that fails AA is not a candidate, however good \
++             it looks in a mock."
++        );
++    }
++}
++
++// --- Theme-name coherence (R3.6) ---------------------------------------------
++
++/// The single most dangerous silent failure in this story. The theme is keyed by
++/// the `name` field INSIDE the JSON, not by the filename. If the string in
++/// `default.json` does not match it EXACTLY, the app falls back to One Dark and
++/// only logs — after extensions load (`theme_settings.rs:171-181`). That is a Zeo
++/// build that looks exactly like Zed, with a green test suite and a clean build.
++#[test]
++fn default_json_theme_names_match_the_theme_family() {
++    let family = zeo_family();
++    let names: Vec<&str> = family
++        .themes
++        .iter()
++        .map(|theme| theme.name.as_str())
++        .collect();
++
++    let raw = read_asset("settings/default.json");
++    let text = match String::from_utf8(raw) {
++        Ok(text) => text,
++        Err(error) => panic!("assets/settings/default.json is not UTF-8: {error}"),
++    };
++
++    // default.json carries comments and trailing commas, so it needs the same
++    // lenient parser the settings store uses.
++    let settings: serde_json::Value = match serde_json_lenient::from_str(&text) {
++        Ok(value) => value,
++        Err(error) => panic!("assets/settings/default.json does not parse: {error}"),
++    };
++
++    let theme_block = &settings["theme"];
++
++    assert_eq!(
++        theme_block["mode"], "system",
++        "the appearance still follows the system (D11) — 002 changes which themes are \
++         named, not how they are chosen"
++    );
++
++    for (key, expected) in [("dark", "Zeo Dark"), ("light", "Zeo Light")] {
++        let configured = theme_block[key].as_str().unwrap_or("<not a string>");
++
++        assert_eq!(
++            configured, expected,
++            "assets/settings/default.json names {configured:?} for `{key}`, but the theme \
++             is keyed by the `name` field inside zeo.json. A mismatch does NOT fail the \
++             build, does NOT fail the app, and does NOT show an error — it silently falls \
++             back to One Dark (R3.6)."
++        );
++
++        assert!(
++            names.contains(&expected),
++            "{expected:?} must exist as a `name` in zeo.json; it declares {names:?}"
++        );
++    }
++}
+-- 
+2.55.0
+

@@ -1,0 +1,715 @@
+# Deviation register — story 002 (Zeo Visual Identity), Run mode.
+# Maintained by the orchestrator; passed as "Project State" to every Executor.
+
+deviations:
+  - task: "1.2"
+    component: "task ordering (Task 1.2 before Task 3)"
+    design: >-
+      tasks.md sequences 1.2 ("bank the pre-change baseline") ahead of every visual
+      change, on the stated ground that it is IRREVERSIBLE — "once Task 3 lands, the
+      'before' cannot be recreated without a checkout and a full rebuild".
+    actual: >-
+      The pre-change RELEASE binary was banked instead, and the capture deferred to the
+      human phase (alongside 7.1). `fork/target/release/zeo` (built 06:28) is hardlinked
+      to `.epic/stories/002-visual-identity/baseline-bin/zeo`.
+    reason: >-
+      The premise is false in this working tree. (a) The binary IS the unchanged "before":
+      the only fork commit after it was built (b05f68f9be) touches README.md alone — no
+      `crates/` or `assets/` file. (b) `rust-embed` is used WITHOUT the `debug-embed`
+      feature (crates/assets/src/assets.rs), so a RELEASE build embeds assets/themes/**
+      into the binary. The banked binary therefore renders the pre-change (Zed/One Dark)
+      appearance permanently, regardless of what the source tree does next.
+      Cost: a hardlink on the same filesystem — 0 bytes. It survives `cargo build` and
+      `cargo clean` (cargo unlinks and recreates target/release/zeo; the inode stays alive
+      through our link).
+    impact: >-
+      The irreversibility that forced 1.2 ahead of Task 3 is GONE — the "before" is now
+      reproducible on demand. Task 1.2 moves to the human phase and runs together with 7.1,
+      which also removes the need to seize the user's live desktop mid-Run. No requirement
+      is weakened: R5.1 still gets its before/after pairs from an identical fixture.
+    approved_by_user: true
+
+  - task: "5.1"
+    component: "Task 5 dependency declaration"
+    design: 'tasks.md, Task 5 header: "Dependencies: None (parallel with 2-4)"'
+    actual: "Task 5 is sequenced AFTER Task 3 and is NOT parallelised."
+    reason: >-
+      The declaration contradicts D25. Task 3.0 adds the `modal_surface_background` field
+      to `ThemeColors` and to the theme JSON schema; the Zeo theme authored in 5.1 must SET
+      that field, or D7's four-level ladder has no colour for `e3` to step to and the theme
+      ships a three-level ladder. A `zeo.json` written before 3.0 could not carry the key.
+      Task 5 therefore depends on Task 3, not on nothing.
+    impact: >-
+      Sequential execution (1 -> 2 -> 3 -> 4 -> 5) already satisfies this; no reordering
+      was needed. 5.1's Executor is explicitly instructed to set `modal_surface.background`
+      in both variants. Recorded so the (false) parallelism claim is not acted on later.
+
+  - task: "1.1"
+    component: "Validation note — shellcheck availability"
+    design: >-
+      tasks.md 1.1 Validation carries a GOTCHA inherited from story 001: "shellcheck is
+      absent on this host — suggest dev-util/shellcheck; do not install without
+      authorization".
+    actual: "shellcheck IS installed (/usr/bin/shellcheck). The validation runs for real."
+    reason: "Host state changed since story 001. The note is stale, not wrong-in-principle."
+    impact: "1.1's shellcheck gate is enforced rather than waived. Strictly stronger."
+
+  - task: "1.2 / 7.4"
+    component: "Commit sub-tasks that version evidence under .epic/"
+    design: >-
+      1.2 commits "chore: bank pre-change visual baseline" and 7.4 commits "feat: visual
+      acceptance evidence for story 002".
+    actual: "OPEN — flagged, not yet resolved. Deferred to the human phase (Phase C)."
+    reason: >-
+      The artefacts those commits would carry — `shots/` and `smoke-002.md` — live under
+      `.epic/`, which is the FIRST line of the workspace `.gitignore`. Both commits are
+      therefore no-ops against the workspace repo.
+    impact: >-
+      Resolve at Phase C: either move the shots and smoke-002.md out of `.epic/` (e.g.
+      `docs/visual/`) so the evidence is genuinely versioned, or accept it as local-only
+      evidence and drop the two Commit sub-tasks. Does not block Phase B.
+
+  - task: "1.1"
+    component: "scripts/shot.sh — surface driver"
+    design: >-
+      The orchestrator's ruling asked for a surface->driver MAP applied automatically
+      (e.g. `--surface command-palette` implies sending ctrl+shift+p via ydotool).
+    actual: >-
+      The driver is plugged in at the CALL SITE via a repeatable `--keys <chord>` flag.
+      The surface->chord registry survives as suggested chords in `--help` plus a loud
+      WARN when a non-`editor` surface is captured with no `--keys`.
+    reason: >-
+      An auto-map is UNIMPLEMENTABLE against the frozen test. Scenario s1 drives
+      `--surface command-palette` with NO keys and asserts exit 0 plus two PNGs — on a host
+      where ydotool is provably unusable. An auto-map would make s1 red, and the only way to
+      "fix" that would be to edit an assertion, which the frozen-test rule forbids.
+    impact: >-
+      The ruling's TEETH are preserved exactly where it put them: when a driver IS requested
+      (`--keys`) and ydotool/ydotoold is unusable, the script exits non-zero BEFORE launching,
+      names the surface and the missing capability, writes no PNG and leaves no window.
+      RESIDUAL RISK for Phase C: forgetting `--keys` yields an at-rest PNG under a driven
+      surface name. Mitigated by the WARN, not by a hard error (a hard error is impossible
+      without editing s1). **Phase C must pass `--keys` explicitly for every driven surface.**
+    test_surface_adjusted: false
+
+  - task: "1.1"
+    component: "scripts/shot.sh — appearance pinning"
+    design: "tasks.md/design.md say the throwaway settings.json pins the APPEARANCE per pass."
+    actual: >-
+      The script pins the theme NAMES too (`--theme-light` / `--theme-dark`, defaulting to
+      the stock `One Light` / `One Dark`), not merely `\"mode\"`.
+    reason: >-
+      `ThemeSelection` (fork/crates/settings_content/src/theme.rs:274-287) is
+      `#[serde(untagged)]` and its `Dynamic` variant requires BOTH `light` and `dark`; only
+      `mode` carries `#[serde(default)]`. A settings file containing just `{\"mode\":\"light\"}`
+      fails to deserialise, which rejects the WHOLE user settings file — so the appearance
+      would be SILENTLY not pinned, and R5.1's "same fixture" guarantee would be void.
+    impact: >-
+      Strictly stronger. The script also warns when `--label after` still carries the stock
+      One Light/One Dark names — a guard against capturing the "after" pass against the old
+      theme. Phase C must pass `--theme-light 'Zeo Light' --theme-dark 'Zeo Dark'` for the
+      `after` pass.
+
+  - task: "2.1"
+    component: "backing store for the `zeo` settings group"
+    design: >-
+      design.md component 2 says: extend the `ThemeSettingsProvider` trait and implement on
+      `ThemeSettingsProviderImpl`.
+    actual: >-
+      The accessor lives on the trait and its impl EXACTLY as designed. But the settings are
+      backed by a NEW `ZeoSettings` `Settings` impl (`crates/theme_settings/src/zeo.rs`)
+      rather than a field on `ThemeSettings`.
+    reason: >-
+      STRUCTURAL. `zeo` is a nested TOP-LEVEL settings key (`{"zeo": {"radius_scale": …}}`),
+      whereas `ThemeSettings::from_settings` opens by rebinding `let content = &content.theme;`
+      — it reads the FLATTENED `ThemeSettingsContent` fields, which land at the ROOT of
+      settings.json (`ui_font_size`, `theme`, …). A nested object is not one of those and does
+      not belong inside `ThemeSettingsContent`. It is a sibling group on `SettingsContent`
+      (exactly like `title_bar`), so its natural reader is its own `Settings` impl.
+      NOTE — the Executor originally justified this with a churn figure ("settings.rs churn
+      141, the hottest relevant file"). **That figure is RETRACTED.** The orchestrator
+      measured it: 6-month churn is 14, and `theme_settings.rs` is 9 — comparable, not 15x
+      hotter. The Executor had counted ALL history, not the 6-month window. The churn argument
+      does NOT support this deviation and has been withdrawn from both the register and a code
+      comment it had been baked into. The structural reason above is the sole and sufficient one.
+    impact: >-
+      None on the design's contract: no new crate, no second gpui Global, no `crates/zed/src/main.rs`
+      line (inventory auto-registers). R1.1 holds — tokens still resolve through the provider.
+      Story 006 adds knobs to the `zeo` group; `MergeFrom for Option<T>` merges field-wise, so
+      its knobs will not clobber each other.
+
+  - task: "2.1"
+    component: "R1.7 clamp test coverage"
+    design: "The pre-authored test was expected to cover R1.7 (clamp to 0.5-2.0)."
+    actual: >-
+      It did NOT. It exercised only the default (1.0) and in-range writes (1.5, 0.5). The
+      orchestrator found the gap and directed the Executor to ADD four new `#[gpui::test]`
+      functions: below-floor clamps up to 0.5; above-ceiling clamps down to 2.0; the boundaries
+      0.5/2.0 are preserved exactly; and `clamp_radius_scale` is total over NaN/inf.
+    reason: >-
+      R1.7 and D23 would otherwise have shipped UNASSERTED — precisely the "unfalsifiable knob"
+      failure D23 exists to prevent ("story 006 must inherit a validated knob, not a raw f32").
+      Adding NEW tests is permitted; the frozen-test rule forbids modifying existing assertions,
+      not adding coverage. The four original test functions were not touched.
+    impact: "Strictly stronger. The clamp is now falsifiable."
+
+  - task: "2.1 / 2.2"
+    component: "pre-authored test files — compile-blocking bugs and a wrong harness premise"
+    design: "The pre-authored tests were expected to compile and to assert against ui_font_size 16."
+    actual: >-
+      Three repairs were required across BOTH test files. **Zero assertions or expected values
+      were changed in either.**
+      (a) `use gpui::UpdateGlobal;` was missing — `SettingsStore::update_global` needs the trait
+          in scope (E0599).
+      (b) `store.set_user_settings(json, cx)` returns `SettingsParseResult`, NOT a `Result` — it
+          has no `.is_ok()`. Translated to
+          `!matches!(result.parse_status, ParseStatus::Failed { .. })`, message preserved verbatim.
+      (c) THE PREMISE BUG: the gpui test harness pins `ui_font_size` to **14**
+          (`crates/settings/src/settings_file.rs:112,139,155`, upstream, Jan 2026), NOT to
+          default.json's 16. Both test files were authored believing the harness default was 16.
+    reason: >-
+      (a) and (b) are plain bugs; the tests' own module docs sanction exactly this repair ("the
+      test is broken — fix the test, do not 'fix' it by deleting an assertion").
+      (c) is the interesting one. The Executor proposed lowering 2.1's assertion to `px(14.)`.
+      The orchestrator REJECTED that: it pins a test-harness artifact as a contract, and it is
+      unavailable in 2.2, where the expected values ARE the R1.4 design scale (Md = 6.0) — rewriting
+      them to 5.25 would destroy the very scale the test exists to assert. The correct repair is to
+      make the SETUP deliver the font size the tests already CLAIM to assert (their labels read
+      "@ ui_font_size 16"): pin `"ui_font_size": 16` in the JSON written by `write_user_settings`.
+      Applied at one site in 2.1's file and three in 2.2's. Every assertion survives byte-identical.
+      SUBTLETY: the pin must be PER-WRITE, not once in `init_test`. `set_user_settings` REPLACES the
+      user layer, so a global pin would be dropped by any later write — and `the_scale_is_density_invariant`
+      (which reads its baseline before writing, then writes density only) would BREAK. It was
+      deliberately left unpinned; it is internally consistent at the harness default.
+    impact: >-
+      The design's nominal font size (16) is what is tested, rather than a harness artifact that
+      upstream may change. Surface-only edits; assertions frozen.
+    test_surface_adjusted: true
+
+  - task: "2.2"
+    component: "ZeoRadius::Full::rems()"
+    design: "D22 — `Full` is a fixed sentinel (px(9999)), exempt from ui_font_size scaling."
+    actual: "`Full.rems()` returns `rems(9999 / ui_font_size)`, not a constant."
+    reason: >-
+      `Rems` is BY CONSTRUCTION a multiple of the rem base. A constant `rems(9999)` would make the
+      rems form drift with `ui_font_size` while `px()` stayed flat — i.e. the rems form would
+      VIOLATE D22 and disagree with `px()`. Dividing the base back out is what makes both forms
+      honour D22 identically.
+    impact: >-
+      Strengthens the `rems_and_px_agree` invariant to all 8 steps (the test only enumerates the 7
+      non-`Full` ones). Contradicts no assertion. Safe from divide-by-zero: `ui_font_size` is clamped
+      to a MIN_FONT_SIZE of px(6.0) upstream (`theme_settings/src/settings.rs:402-408`).
+
+  - task: "3.1"
+    component: "pre-authored test file `elevation_tests.rs` — the same compile-blocking surface bugs"
+    design: "The pre-authored test was expected to compile against the real `settings` API."
+    actual: >-
+      The identical pair of bugs recorded for 2.1/2.2 recurred, third occurrence. **Zero
+      assertions or expected values were changed.**
+      (a) `use gpui::UpdateGlobal;` was missing — `SettingsStore::update_global` needs the trait
+          in scope (E0599).
+      (b) `store.set_user_settings(json, cx)` returns `SettingsParseResult`, NOT a `Result` — it
+          has no `.is_ok()`. Translated to
+          `!matches!(result.parse_status, ParseStatus::Failed { .. })` with
+          `use settings::ParseStatus;`, message preserved verbatim.
+      Both edits are confined to the `write_user_settings` FIXTURE helper and the import block.
+      NOTE — the (c) "ui_font_size 14 vs 16" premise bug of 2.1/2.2 does NOT recur here: this
+      file's only font-size-sensitive test writes `ui_font_size` explicitly and derives its
+      expected value from the live setting (`theme_settings(cx).ui_font_size(cx)`) rather than
+      from a hard-coded nominal. No pin was needed, and none was added.
+    reason: >-
+      Plain bugs in imports/helpers; no assertion is involved. The file's own module doc sanctions
+      exactly this repair ("an error naming `StyleRefinement`, `div` or `StyledExt` instead means
+      the test is broken — fix the test").
+    impact: >-
+      Surface-only; assertions frozen. RECOMMENDATION for the remaining pre-authored tests in this
+      story: the test author should carry `use gpui::UpdateGlobal;` +
+      `use settings::{ParseStatus, SettingsStore};` and the `matches!` form into the template. Three
+      files, three identical repairs, is a template defect rather than three coincidences.
+    test_surface_adjusted: true
+
+  - task: "3.2"
+    component: "the D24 assertion — MISSING from the pre-authored test"
+    design: >-
+      tasks.md 3.2 demands, in bold: "the assertion that pins D24 — that the background equals
+      `index.bg(cx)`, differing across `elevation_1`/`_2`/`_3`. A weaker `background.is_some()`
+      assertion passes against today's broken helper and MUST NOT BE ACCEPTED."
+    actual: >-
+      The pre-authored test contained PRECISELY the forbidden assertion — `style.background.is_some()`
+      — and nothing else about the background. The orchestrator caught this and directed the Executor
+      to ADD a new test, `elevated_resolves_its_background_from_the_index`, which injects a synthetic
+      theme whose surface/elevated/modal backgrounds are three distinct colours, then asserts each
+      level's background equals that index's `bg(cx)` and that the three are pairwise distinct.
+    reason: >-
+      D24/R2.2 — the THIRD DEFECT and the entire reason sub-task 3.2 exists — was UNASSERTED. The test
+      author's module doc rationalised it away ("the background step is NOT asserted here and CANNOT
+      be"), conflating two different claims: the luminance-step VALUE (genuinely untestable in
+      `crates/ui` — One Dark has elevated == surface by data) with the MECHANISM (does the helper ask
+      the enum?). The mechanism IS testable, by injecting a theme — the machinery was already in the
+      file (`GlobalTheme::update_theme`).
+    impact: >-
+      PROVEN NECESSARY BY MUTATION. With the background hard-coded but the radius and rim fixed — i.e.
+      the exact "looks done, renders flat" implementation — ALL FIVE pre-authored tests pass and only
+      the new test fails (`left: l=0.16 (elevated) / right: l=0.10 (what Surface.bg says)`). Without
+      it, `ElevationIndex::bg()` would have stayed dead code, and 5.1's palette would have rendered
+      completely flat while the suite was green.
+
+  - task: "3.2"
+    component: "ElevationIndex::bg() signature"
+    design: "design.md: `ElevationIndex::{shadow, bg}` keep their signatures."
+    actual: "`bg()` widened from `&mut App` to `&App`."
+    reason: >-
+      UNAVOIDABLE. The ToDo mandates calling `index.bg(cx)` inside `elevated()`, which holds only
+      `&App` — and `elevated`'s signature is frozen by 71 call sites. `&mut App` cannot be obtained
+      from `&App`, so one signature had to give, and it could not be the helper's. `bg()` only reads
+      `cx.theme().colors()`; `&mut` was never needed.
+    impact: >-
+      A WIDENING — strictly more permissive; every existing caller still compiles (verified
+      workspace-wide, incl. `workspace/src/theme_preview.rs`). It also makes the enum uniform: every
+      sibling accessor (`shadow`, `rim`, `on_elevation_bg`, `darker_bg`) already took `&App`.
+
+  - task: "4.1"
+    component: "THE COVERAGE GREP IS BROKEN — it cannot see per-corner literals"
+    design: >-
+      tasks.md 4.1 Validation and the 7.2 gate row both use:
+      `grep -cE '\.rounded_(xs|sm|md|lg|xl|2xl|3xl|full)\(\)'` and require 0.
+    actual: >-
+      That pattern does NOT match the PER-CORNER literal forms — `.rounded_tl_md()`, `.rounded_tr_md()`,
+      `.rounded_br_md()`, `.rounded_bl_md()` — which are EXACTLY what `button_like.rs:753-756` uses (the
+      very lines the sub-task's own Context field points at). The grep returns 0 against a file still
+      full of literals. **The story's official token-coverage gate is blind to the one file it most
+      needs to see.**
+    reason: >-
+      Found the hard way. The Executor's mutation proof re-introduced the per-corner literals, the
+      official grep still returned 0, and only the authored unit test failed. The corrected pattern is:
+      `grep -cE '\.rounded_((tl|tr|br|bl)_)?(xs|sm|md|lg|xl|2xl|3xl|full)\(\)'`
+    impact: >-
+      **THE 7.2 GATE MUST USE THE CORRECTED PATTERN.** Verified 0 under the corrected grep for all three
+      converted files: `styled_ext.rs`, `button_like.rs`, `toggle.rs`. This is the second independent
+      hole tasks.md's own warning predicted in spirit ("the single thing 4.1 can get wrong is the single
+      thing the grep cannot see") — it was truer than its author knew.
+
+  - task: "4.1"
+    component: "R2.7 contradicts design.md's own radius role table"
+    design: >-
+      R2.7: "WHEN a button or TOGGLE is rendered THE SYSTEM SHALL obtain its radius from the Zeo token
+      at the `md` (6px) step (D9)."
+    actual: >-
+      Button -> `Md` (6px), as required. But checkbox -> `Sm` (4px), and the switch's frame/track/thumb
+      and the placeholder dot -> `Full` (pill).
+    reason: >-
+      R2.7's text contradicts design.md's §Radius ROLE TABLE, which is the authority and assigns
+      `full` (9999) to "avatars, pills, TOGGLES" and `sm` (4) to "tags, badges, CHECKBOXES". The table
+      is right and R2.7's prose is loose: a switch IS a pill, and a 6px switch track/thumb would be
+      visually broken — the knob is a circle.
+      **RETRACTED at v2 — the sentence that used to close this field.** It read: "The conversion
+      therefore PRESERVES each control's existing visual step while re-pointing it at the token; it
+      changes the substrate, not the appearance." That is FALSE, and the Auditor caught it against the
+      diff: checkbox 2px -> 4px (`.rounded_xs()` -> `Sm`, and the code comment admits it — "a deliberate
+      step UP from the 2px this box used to hard-code"), button 4px -> 6px (`.rounded_tl_sm()` x4 -> `Md`),
+      ModalSurface 8px -> 12px (`.rounded_lg()` -> `Xl`). The appearance DID change. Each change is
+      correct per the role table — but the ruling must not rest on a false premise.
+    impact: >-
+      R1.2 (no literals) and the token-driven substrate hold for every control.
+      AUDITOR'S RULING (v2): **for the implementation; R2.7's prose is defective and has been amended.**
+      The decisive argument is one this entry missed — **R2.7 cites D9 as its authority, and D9 says
+      NOTHING about a step.** D9 reads, in full: "Pilot 2 — `button_like.rs` + `toggle.rs` (churn 3 each).
+      Covers every button and toggle in the app." R2.7 conflated *which files the pilot converts* with
+      *which step they get*; the citation does not support the clause. Further, design.md declares the
+      Visual Language section the arbiter ("if a later change contradicts a statement here, the statement
+      — not the change — is wrong until amended"), and a literal R2.7 would violate principle 5 ("a family
+      per role, never one value everywhere"). story.md R2.7 now defers to the role table.
+
+  - task: "4.1"
+    component: "the Executor died mid-mutation-proof and left the mutation applied"
+    design: "The Executor was directed to prove its test non-vacuous by mutation, then RESTORE."
+    actual: >-
+      Its report was truncated (token limit) partway through "Mutation B", leaving `button_like.rs`
+      with the per-corner LITERALS still in place and 2 tests red. The orchestrator diagnosed it,
+      restored the token form (`let radius = ZeoRadius::Md.px(cx);` + `.rounded_tl(radius)` x4), and
+      re-validated: 79 lib tests + 39 doc-tests green, clippy clean, both greps 0.
+    reason: "Subagent context exhaustion, not a design or implementation fault."
+    impact: >-
+      None on the shipped code. Recorded because the mutation proof it DID complete is what exposed the
+      broken coverage grep above — the failure was productive. Its authored test
+      (`control_radius_tests.rs`) correctly asserts against `zeo.radius_scale`, not just `ui_font_size`
+      (see the discovery below).
+
+  - task: "5.1"
+    component: "the modal_surface.background assertion — MISSING from the pre-authored test"
+    design: >-
+      The pre-authored `zeo_theme.rs` asserts the ladder background -> surface -> elevated, and carries
+      R2.1's data half.
+    actual: >-
+      It NEVER asserted `modal_surface.background` — the D25 field that sub-task 3.0 added precisely so
+      `e3` would have a colour to step to. The orchestrator directed the Executor to ADD
+      `modal_surface_is_a_real_luminance_step_above_elevated_in_both_variants`.
+    reason: >-
+      A `zeo.json` omitting the key would fall back to `elevated_surface_background` (a fallback that
+      exists to protect ZED's themes) and Zeo would ship a THREE-level ladder — silently, with all six
+      pre-authored tests green. The same class of hole as the missing D24 assertion in 3.2.
+    impact: >-
+      Verified falsifiable: stripping the key makes the new test panic while the other six stay green.
+      The four-rung ladder is now pinned end to end.
+
+  - task: "5.1"
+    component: "light `info` desaturated AND rotated"
+    design: >-
+      design.md §Accent: the light accent's 35-degree separation from `info` is tight; "mitigate by
+      desaturating `info` in the Zeo light theme".
+    actual: "S 0.70 -> 0.47 AND hue 227 -> 204 degrees. Separation goes 35 -> 59 degrees."
+    reason: >-
+      Desaturation alone leaves the hues 35 degrees apart. The rotation brings the light variant's
+      separation in line with dark's 54 degrees, so both variants share one hue architecture
+      (accent ~263, blue ~211, teal ~188). One and One Light never did.
+    impact: "Strictly stronger than the mitigation design.md asked for. R3.3 holds with margin."
+
+  - task: "5.1"
+    component: "One Light's indigo retired from the syntax palette"
+    design: "D14/R3.8 — derive syntax from One Dark, harmonised with the accent; do not author from scratch."
+    actual: >-
+      Derived as instructed, but One Light's indigo (`#5c78e2`) was RETIRED rather than harmonised, and
+      `type`/`enum`/`operator` moved to teal (188 degrees) to preserve the blue/teal distinction One Dark has.
+    reason: >-
+      That indigo sits 35 degrees from the Amethyst AND already FAILS AA at 3.84:1 in upstream One Light. It
+      could not be kept without either colliding with the accent or shipping a known contrast failure.
+    impact: >-
+      Zeo Light leaves 2 of 45 syntax tokens below AA (`comment`, `predictive` — recessive by design, and
+      both still beat One Light's). Upstream One Light leaves 35 of 45 below AA. Zeo Dark: 3 below, all
+      better than One Dark's equivalents (One Dark: 13). Strictly better than what it derives from.
+
+  - task: "5.1"
+    component: "THE BORDERS WERE LEFT INSIDE THE LADDER — a regression 5.1 introduced"
+    design: >-
+      R2.1/D7: an elevated surface is separated from the one beneath by BOTH a background
+      luminance step AND a hairline border. design.md's Testing Strategy demanded "boundaries
+      clear 3:1", noting it is "computable directly from the theme JSON — no rendering needed",
+      and the D20 gate table repeated it.
+    actual: >-
+      The luminance step shipped; the hairline did not. `border.variant` was left at `#403d4d`
+      while 5.1 built the ladder around it — so it is now LIGHTER than e1 (#363443), BYTE-ADJACENT
+      to e2 (#403d4f — contrast **1.00:1**), and DARKER than e3 (#49465b). It crosses the ladder
+      instead of clearing it and collapses to nothing exactly at the elevated surface.
+      `border` is barely better: 1.15:1 against modal. In Zeo Light, `border.variant` is 1.05:1
+      against the app background.
+      NOT caught by any test: the "boundaries 3:1" clause was silently narrowed to "the accent
+      clears AA" when design.md was transcribed into tasks.md (at 5.1's Tests line AND at the 7.2
+      gate row), so nothing ever asserted a border. All 7 pre-authored tests were green.
+    reason: >-
+      A latent trap in the upstream palette that only springs once you fix the thing this story
+      exists to fix. Upstream One Dark's ladder is FLAT (`surface` == `elevated` == `#2f343eff`,
+      research finding 2), so a single fixed `border.variant` sat consistently above ALL of it and
+      the crossing was impossible. **Story 002 created the ladder and did not move the border.**
+      This is a self-inflicted regression, not an inherited defect — and it is the SAME CLASS of
+      defect as D24 (a mechanism that silently paints the wrong thing while the suite stays green).
+    impact: >-
+      SEVERE, and it lands on the story's headline feature. The chokepoint paints `border_variant`
+      on every elevated surface (`styled_ext.rs:43`), so the invisible hairline is not one widget —
+      it is all **71 re-skinned call sites**: every picker, command palette, popover, context menu
+      and toast. R2.1 demands step AND hairline; what shipped has only the step.
+      FIXED at v2 by new sub-task **5.4** (Task 5 reopened): `border` -> `#636077` (dark) / `#b9b4c7`
+      (light), `border.variant` -> `#58546a` / `#c8c6d7`, hue and saturation preserved. R3.5's
+      over-reaching "3:1" clause is replaced by R3.9 (focus ring 3:1 — what WCAG 1.4.11 actually
+      governs, and it already passed) and R3.10 (border floors: `border` >=1.5:1, `border.variant`
+      >=1.25:1 against EVERY rung). Both floors beat upstream One (1.43:1 / 1.12:1) while staying
+      inside design.md principles 1 and 10 — a low-contrast hairline that merely has to EXIST.
+    found_by: "validate-mode Auditor, 2026-07-13; independently re-measured by the orchestrator"
+
+  - task: "story-level"
+    component: "Success Metric — 'at most 6 upstream files' — BREACHED, and the metric was stale"
+    design: 'story.md Success Metrics: "the patch set touches at most 6 upstream files, none above churn 3, plus a 2-line hunk"'
+    actual: "17 upstream files modified + 9 added. Of the 17, 8 carry substantive edits."
+    reason: >-
+      The metric predates the round-2 amendments. D23 (the `zeo` settings group) and D25
+      (`modal_surface_background`) were both APPROVED after it was written, and each forces its own
+      fan-out of exhaustive-struct-init sites that no one costed at the time: D25 pulled in
+      `default_colors.rs`, `fallback_themes.rs` and `theme_settings/src/schema.rs`; D23 pulled in
+      `settings_content.rs` and `vscode_import.rs`. The rest of the delta is `mod`/`pub use`
+      registrations and two Cargo.toml dev-dependency lines.
+    impact: >-
+      The metric is restated at v2 against the real patch set rather than quietly dropped. The rebase
+      risk it was PROXYING for did not materialise: **zero call sites of `elevated()` were touched**
+      (R2.6 holds — verified across all 7 fork commits), and the substantive edits sit in cold files.
+      A file count was the wrong proxy; "no hot file, no call site" is the property that mattered.
+
+  - task: "5.4"
+    component: "test authorship — Test Advisor ran at RUN time, not at Phase 3"
+    design: >-
+      Full mode pre-authors every test at Phase 3 (Test Advisor -> `.draft/authored-tests/` ->
+      materialised by the orchestrator at Run step 7).
+    actual: >-
+      5.4 was born during the v2 REFINE pass, after Phase 3 had already closed, so it had no
+      pre-authored test and nothing in `.draft/authored-tests/` to materialise. The orchestrator
+      spawned the Test Advisor at RUN time to author the three new tests into the EXISTING
+      `zeo_theme.rs`, confirmed the Red itself (`cargo` exit 101, 11 of 16 pairs below floor,
+      headline `border.variant` on `elevated_surface` at 1.00:1), and only then handed the file
+      to the Executor as a frozen read-only input.
+    reason: >-
+      The alternative was a test-AFTER Executor writing both the fix and the assertion that judges
+      it. This story has already been bitten three times by exactly that shape of hole (the missing
+      D24 assertion, the missing `modal_surface` assertion, the missing border assertion that
+      PRODUCED this sub-task) — every one of them found by someone other than the author. Separating
+      the author of the assertion from the author of the fix is the control that keeps catching them.
+      It is also the only way to get a genuinely OBSERVED Red here: the broken `zeo.json` was still
+      in the tree, so a test written before the fix went red on its own, with no staging.
+    impact: >-
+      Strictly stronger, and cheap (the crate was already warm). Recommendation for future refine
+      passes: a sub-task added at refine SHOULD get a Test Advisor pass at run time. The Phase 3
+      boundary is an artefact of when the plan was written, not a property of the work.
+
+  - task: "5.4"
+    component: "test attribute — `#[gpui::test]` -> plain `#[test]`"
+    design: 'tasks.md 5.4 Tests: "a new `#[gpui::test]` sweeping 2 border tokens x 4 surface rungs x 2 variants".'
+    actual: "All three new tests are plain `#[test]`."
+    reason: >-
+      They read a JSON file and do arithmetic — no `TestAppContext` is needed or used. Six of the
+      seven pre-existing tests in the file are already plain `#[test]` for exactly this reason; only
+      `both_variants_register_with_no_code_change` (which touches the real registry) takes a `cx`.
+      Spinning up a gpui App to divide two luminances would be waste and inconsistent with the file.
+    impact: "Surface only. No assertion is affected. The sweep runs in 0.06s."
+    test_surface_adjusted: false
+
+  - task: "5.4"
+    component: "the distinctness assertion — ADDED beyond the Tests field"
+    design: >-
+      5.4's Tests field lists two sweeps: the 16-pair border floor sweep (R3.10) and the
+      `border.focused` sweep (R3.9). The ToDo separately carries a GOTCHA — "keep the two tokens
+      distinct" — but no test was specified for it.
+    actual: >-
+      A third test was authored, `the_two_border_tokens_remain_distinct_colours_in_both_variants`,
+      guarding it via the file's existing `same_color()` helper.
+    reason: >-
+      Without it, the CHEAPEST way to make the 16-pair sweep pass is to collapse both tokens onto one
+      bright value. The Test Advisor wrote the guard as a theoretical anti-cheat and then found the
+      cheat was genuinely tempting: the two tokens sit only ~1.16:1 apart TODAY, so "one value clears
+      everything" is a real local optimum. Collapsing them destroys the prominence hierarchy that 162
+      `border` and 127 `border_variant` call sites consume — an invisible-hairline regression traded
+      for a flat-border one. Adding coverage is permitted; the frozen-test rule forbids modifying
+      existing assertions, not adding new ones.
+    impact: "Strictly stronger. The correct fix WIDENS the gap (to 1.20:1); the guard pins that it must."
+
+discoveries:
+  - task: "post-run verification"
+    tech: "downstream regression"
+    finding: >-
+      The `--auto` block validated only the 4 crates it edited, while the chokepoint changed the
+      RENDERED BEHAVIOUR of 71 call sites across 14 other crates. That gap was closed after the fact:
+      `cargo test` was run across every crate that consumes `elevated()` / `elevation_1|2|3` —
+      editor (832), agent (~690), agent_ui (419), workspace (219), sidebar (140), git_ui (137),
+      dev_container (111), edit_prediction (86), zed (71), debugger_ui (57), keymap_editor (43),
+      recent_projects (33), go_to_line (8), picker (3). **2,849 tests, 0 failures, real cargo exit 0.**
+      The re-skin broke nothing downstream.
+      METHOD NOTE, worth keeping: the first run piped cargo through `tail`, so the reported exit code
+      was `tail`'s (0) and said NOTHING about cargo. Never gate on an exit code that crossed a pipe
+      without `pipefail`.
+  - task: "post-run verification"
+    tech: "zed crate — PRE-EXISTING test flakiness"
+    finding: >-
+      `cargo test -p zed` fails INTERMITTENTLY under the default parallel runner, 1-3 tests per run,
+      always the same three: `test_multi_workspace_session_restore`,
+      `test_restored_project_groups_survive_workspace_key_change`, and
+      `test_dev_container_flag_cleared_without_config`. All three are session-restore/persistence tests.
+      **PROVEN PRE-EXISTING, not assumed.** Three lines of evidence:
+      (1) `--test-threads=1` passes 71/71, three runs in a row -> it is a shared-state race, not a
+          logic failure;
+      (2) none of the three tests touches elevation, radius or theme;
+      (3) DECISIVE — checking out the pre-002 commit (b05f68f9be), with ZERO of this story's code,
+          reproduces exactly the same three failures at the same rate.
+      Not story 002's to fix, but worth a bug for the fork: it makes any future `-p zed` gate unreliable.
+  - task: "post-run verification"
+    tech: "rustfmt"
+    finding: >-
+      `cargo fmt --check` is RED on this fork, and was already red before story 002. Root cause is
+      uniform: code written or patched BY HAND and never run through rustfmt.
+      Story 002 contributed 5 files — all of them the PRE-AUTHORED TEST files, hand-written at plan
+      time. Story 002's PRODUCTION code (radius.rs, elevation.rs, styled_ext.rs, zeo.rs x2,
+      button_like.rs, toggle.rs) was clean throughout.
+      Fixed in commit `06dc88dc9e`, layout-only. Safety proof for the frozen-test rule: every string
+      and numeric literal is byte-identical before and after (rustfmt only rewrapped calls and added
+      the trailing commas it inserts when exploding one across lines), and the suite reports the same
+      180 passing tests. No assertion moved.
+      STILL RED, and NOT story 002's to fix (5 files, 21 hunks, all from story 001): the four
+      `claude_code_ide` files (from the hand-applied overlay patch 0002) and `crates/zed/src/zed.rs`
+      (story 001 expanded a `ReleaseChannel::Stable` match arm into a block while adding the `Zeo`
+      arm; rustfmt wants it back as a one-liner). Note this was initially misdiagnosed as a rustfmt
+      VERSION artifact (system 1.96.1 vs the pinned 1.95.0) — it is not; the dirt sits exactly on
+      story 001's own edits.
+  - task: "5.1"
+    tech: "colour science / design.md ERRATUM"
+    finding: >-
+      **design.md's elevation table is in CIE L*, but it LABELS the column "relative luminance" — and the
+      frozen test measures WCAG relative luminance (Y).** The two diverge hard at the dark end: D7's literal
+      "+2-3 L*" for e1 computes to ~0.006 Y, which is HALF the test's `MIN_LUMINANCE_STEP` floor of 0.01 Y.
+      Sizing the rungs to D7's stated numbers would have FAILED the test that D7 exists to satisfy. The
+      Executor sized every rung to clear 0.01 Y (approx +4 L*), satisfying both the test and D7's intent.
+      **design.md should be corrected at the gate.**
+  - task: "5.1"
+    tech: "colour data / design.md ERRATUM"
+    finding: >-
+      **Research finding 2 is UNDERSTATED in design.md.** `elevated_surface.background` and
+      `surface.background` are not "+0.2% apart" — they are the IDENTICAL STRING (`#2f343eff` dark,
+      `#ebebecff` light). The step is exactly 0.0000. The +0.002 figure design.md cites belongs to a
+      DIFFERENT pair (`element.background` #2e343e -> `surface` #2f343e). The elevated rung does not
+      merely fail to be visible; it does not exist.
+  - task: "5.1"
+    tech: "theme loading — a silent-failure trap"
+    finding: >-
+      **`zeo.json` MUST stay strict JSON.** The BUNDLED theme loader uses `serde_json::from_slice`
+      (`theme_settings.rs:242`), NOT the lenient parser that `deserialize_user_theme` (and therefore the
+      test) uses. A comment or trailing comma would PASS the test suite and then fail SILENTLY in the app
+      — log-only, falling back to One Dark. Same class of trap as the theme-name mismatch (R3.6), and it
+      would be found only by launching the binary. Verified strict with `jq empty`.
+  - task: "4.1"
+    tech: "gpui radius literals"
+    finding: >-
+      **GPUI's `.rounded_md()` and friends are REM-BASED, so they already scale with `ui_font_size`.**
+      This means a test that varies only `ui_font_size` CANNOT distinguish the Zeo token from the literal
+      it replaced — the mutation passed at both 16 and 20. The ONLY lever that separates them is
+      `zeo.radius_scale`, which the literal cannot see. Any future token-coverage test (story 003 will
+      write many) MUST vary `zeo.radius_scale` to be non-vacuous. This was found empirically by the
+      4.1 Executor's mutation proof and is the single most transferable lesson of this task.
+  - task: "3.2"
+    tech: "call-site inventory"
+    finding: >-
+      The chokepoint re-skins **71 call sites across 47 files**, not the 55/45 the plan states (the
+      difference is the `_borderless` variants). Zero were modified — R2.6 holds. Also: the command
+      palette has no `elevation_*` call of its own; it inherits its surface via
+      `Picker::uniform_list` -> `picker/src/render.rs:68 .elevation_3(cx)`, landing on `ModalSurface`
+      -> `Xl` (12px), exactly as design.md prescribes.
+  - task: "3.2"
+    tech: "toasts"
+    finding: >-
+      `notifications/src/status_toast.rs:83` calls `.elevation_3(cx)`, so toasts now inherit the MODAL
+      background and the modal radius (Xl, 12px) rather than the popover's Lg. That follows from the
+      pre-existing call site, not from the conversion, and correcting it would mean touching a call site
+      (forbidden by R2.6). If the design wants toasts at e2, that is a deliberate call-site change for
+      story 003. Flagged, not fixed.
+  - task: "2.2"
+    tech: "gpui / DynamicSpacing"
+    finding: >-
+      The formula, confirmed and mirrored (`ui_macros/src/dynamic_spacing.rs:146-162`):
+      `ratio = nominal_px / 16.0` (the rem base lives ONLY here), then
+      `px() = px(ui_font_size × ratio)` — never `16 × ratio`. `ZeoRadius` mirrors this exactly,
+      minus the density arm (D21), and multiplies the ratio by the already-clamped
+      `zeo_radius_scale`. An implementation that hard-codes the 16px base compiles and passes
+      every other assertion in the file — which is why `steps_scale_with_ui_font_size_not_with_a_fixed_16px_base`
+      exists. It passes.
+  - task: "1.1"
+    tech: "grim / KWin"
+    finding: >-
+      **BLOCKER FOR PHASE C (1.2 and 7.1), verified by the orchestrator, not just claimed.**
+      `grim` CANNOT CAPTURE on this host: `grim -g '0,0 1x1' out.png` ->
+      "compositor doesn't support the screen capture protocol", exit 1, no file written.
+      KWin does not implement the `wlr-screencopy` protocol that grim requires. Every real
+      `shot.sh` invocation will therefore fail at the capture step (loudly, and with no
+      zero-byte PNG — the harness behaves correctly; the backend is simply dead).
+      `spectacle` 6.7.2 IS installed, and design.md §9 already names it as the intended
+      fallback ("or per-window via `spectacle`") — the DESIGN anticipated this; the
+      pre-authored test did not (it pins `grim` in its shims and assertions).
+      Swapping the backend to spectacle therefore changes what the frozen test's assertions
+      expect => it is a BEHAVIOUR-CHANGING change and must be escalated to the user, NOT
+      resolved by an executor. Deferred to Phase C, where the user is present.
+      Sub-task 1.1 remains legitimately GREEN: it satisfies its contract as written.
+  - task: "1.1"
+    tech: "test coupling"
+    finding: >-
+      Scenario s2 of the frozen test ("grim missing -> loud failure") passes on this host for
+      a HOST-SPECIFIC reason: its shim dir omits `grim`, but PATH still contains /usr/bin, so
+      the script finds the REAL grim — which exits non-zero only because KWin cannot
+      screencopy. On a wlroots host the same scenario would capture the real screen and s2
+      would go RED. Latent coupling inside the frozen test; unfixable without editing it.
+  - task: "run-mode"
+    tech: "environment"
+    finding: >-
+      Synthetic input is UNAVAILABLE for driving GPUI surfaces: `slurp` absent (anticipated
+      by the plan), and also `wtype` absent, `ydotoold` not running, `/dev/uinput` is
+      root-only (crw------- root root), the user is not in the `input` group, and `xdotool`
+      cannot drive a native Wayland client. Only "editor at rest" is reachable by launching
+      the binary with a file. `ydotool` IS installed — enabling it needs only a daemon
+      (`sudo ydotoold`), no package install. Decision deferred to capture time (user's
+      choice); `scripts/shot.sh` is therefore built with a PLUGGABLE driver step that fails
+      loudly when a surface needs input the host cannot synthesise.
+  - task: "run-mode"
+    tech: "cargo / fork"
+    finding: >-
+      `fork/target/debug` is already 133 GB (warm) and `target/release` 32 GB. Red
+      confirmation via `cargo test` is incremental, not a cold build. ALWAYS `cd fork`
+      first — cargo reads `.cargo/config.toml` from the CWD, and `--manifest-path` from the
+      workspace root silently drops the fork's rustflags (docs/BUILD.md).
+  - task: "1.2 / 1.3"
+    tech: "screen capture — THE SILENT FAILURE, and it nearly shipped"
+    finding: >-
+      **A capture taken while the desktop session is LOCKED is not a failed capture. It is a
+      SUCCESSFUL capture of nothing.** KWin does not paint the contents of windows the lock
+      screen occludes, so `spectacle -a` returns a correctly-sized, non-zero, perfectly
+      decodable PNG of an EMPTY pane, and exits 0.
+      Every guard in the harness waves it through — and the harness was BUILT to catch exactly
+      this class of thing. The file is non-empty (s2's contract). It decodes (s1's). The
+      geometry pair-check (s7) passes, because BOTH passes are equally blank. There is nothing
+      in the artefact that says "this is a picture of nothing", so **no check placed after the
+      capture can ever work**. The probe has to run in preflight, before a window is launched.
+      HOW IT WAS CAUGHT — worth recording, because it was luck. The run produced flawless empty
+      PNGs. TWO INNOCENT CAUSES WERE BLAMED AND "FIXED" FIRST (the trust modal, then `--settle`);
+      both were wrong. It took a FULL-SCREEN capture, taken outside the harness for an unrelated
+      reason, to see the lock screen. Without that accident, six blank PNGs would have been
+      committed as story 002's visual evidence and the before/after pairs would have compared
+      nothing to nothing.
+      FIXED: `scripts/shot.sh` probes `loginctl … LockedHint` in preflight and dies. It fails
+      OPEN when loginctl is absent, which is what keeps the hermetic suite hermetic. Scenario 9
+      supplies a `loginctl` that reports locked and asserts the run dies before the launch with
+      no PNG at all; its mirror asserts an unlocked session still captures, so the guard cannot
+      degrade into a blanket refusal.
+      **FOR STORY 003 (which will capture the chrome): the operator must be present and the
+      session unlocked. This is now enforced, not merely documented.**
+  - task: "1.2"
+    tech: "Zed's trust modal — it would have corrupted every DRIVEN surface"
+    finding: >-
+      A throwaway config dir makes the fixture an UNTRUSTED worktree, so Zed raises its
+      "Unrecognized Project / Restricted Mode" modal over the editor. Two consequences, and the
+      second is the one that matters: it covers the surface the capture exists to show, and it
+      **HOLDS FOCUS** — so every `--keys` chord would have been delivered to the MODAL instead
+      of the editor. All five driven surfaces (command palette, file picker, popover, modal,
+      button row) would have captured the wrong thing under the right filename, in both passes,
+      consistently. The pair-check would not have blinked.
+      FIXED declaratively via `session.trust_all_worktrees: true` in the throwaway settings
+      (`settings_content/src/project.rs:389` → `trusted_worktrees.rs:469`). Sending `enter` to
+      dismiss it would also work, but only for as long as the keystroke lands — the kind of
+      thing that fails once and is never noticed.
+      **The key PREDATES story 002** (verified present at the baseline commit `b05f68f9be`), so
+      the banked pre-change binary parses it too. Had it not, the whole settings file would have
+      been rejected and the THEME would have gone silently unpinned — the same class of trap one
+      rung down, and the exact failure mode the `ThemeSelection` deviation already warns about.
+  - task: "5.4"
+    tech: "zeo.json — a find/replace trap"
+    finding: >-
+      **The border hexes are SHARED with unrelated keys. A hex-level find/replace on `zeo.json`
+      would have silently repainted other tokens.** `#e4e3eb` (Zeo Light `border.variant`) appears
+      **6 times** in the file — it is also `element.hover` and `ghost_element.hover`. `#cecbd8`
+      appears 4 times; `#524f62` and `#403d4d` 3 times each. The 5.4 Executor found this while
+      scoping the edit and matched on the **key+value line** instead, verifying each of the four is
+      unique at that granularity. Anyone repainting this palette (story 003 will) must do the same:
+      a palette JSON is not a place where `sed s/#hex/#hex/g` is safe, and the failure would be
+      silent — it compiles, it parses, and only the eye catches it.
+  - task: "5.4"
+    tech: "colour science / the shape of the fix"
+    finding: >-
+      **Zeo Light was the harder half, and the story never said so.** The defect was framed
+      throughout as a dark-mode elevated-surface problem (the 1.00:1 hairline). But 6 of the 11
+      violations were in Zeo Light, and the one nobody predicted is that `border` failed against the
+      light **canvas itself** (e0) at 1.19:1 — the bottom of the light ladder had no structural border
+      at all, independently of anything story 002 did. The ladder did not cause the light defect; it
+      widened a gap that was already there. Upstream One Light shipped it.
+  - task: "5.4"
+    tech: "the equilibrium is tight, ON PURPOSE — read this before repainting"
+    finding: >-
+      **4 of the 16 pairs clear their floor by under 0.003, and all four sit at the ladder's
+      extremes** (Zeo Light `border.variant` on `background` +0.0011; Zeo Dark `border.variant` on
+      `modal` +0.0014; Zeo Dark `border` on `modal` +0.0019; Zeo Light `border` on `background`
+      +0.0031). That is the "no margin wasted" the plan asked for, and it is the unavoidable geometry
+      of ONE token spanning FOUR rungs — push a border further from one end of the ladder and it
+      approaches the other.
+      CONSEQUENCE: **any future repaint of the canvas or modal rung, in either variant, flips the
+      16-pair sweep red without a border being touched.** That is the sweep working as designed, not
+      the sweep being brittle — but whoever hits it should re-derive the BORDERS against the new
+      ladder rather than assume they broke something. Verified safe against f32: the smallest margin
+      is ~10^4x the f32 epsilon at that magnitude, so there is no rounding hazard, only a design one.

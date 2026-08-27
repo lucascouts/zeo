@@ -1,0 +1,2 @@
+72648be88a350befcba0461070a6b1051dc6ea25132b75d90c0f922f23b164e0  fork/crates/zed/resources/app-icon-zeo.png
+72648be88a350befcba0461070a6b1051dc6ea25132b75d90c0f922f23b164e0  fork/crates/zed/resources/zeo/hicolor/512x512/apps/dev.zeo.Zeo.png

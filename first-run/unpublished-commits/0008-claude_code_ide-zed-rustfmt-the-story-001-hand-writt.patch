@@ -1,0 +1,333 @@
+From 4653c6c210e796b2f8023967a7b93129857ceeff Mon Sep 17 00:00:00 2001
+From: lucascouts <lucascs@protonmail.com>
+Date: Sun, 12 Jul 2026 03:25:05 -0300
+Subject: [PATCH 8/9] claude_code_ide, zed: rustfmt the story-001 hand-written
+ code
+
+These were the last files failing `cargo fmt --check` on this fork. Both are
+hand-written rather than upstream: the claude_code_ide crate arrived as a
+manually applied overlay patch, and zed.rs had its ReleaseChannel::Stable match
+arm expanded into a block when the Zeo arm was added beside it -- rustfmt wants
+it back as a one-liner.
+
+Layout only. Every string and numeric literal is byte-identical before and after.
+The fork now passes `cargo fmt --check` in full, which keeps it from drifting
+against upstream's own fmt gate at rebase time.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ crates/claude_code_ide/src/claude_code_ide.rs | 18 +++--
+ crates/claude_code_ide/src/open_diff.rs       |  9 ++-
+ crates/claude_code_ide/src/server.rs          | 66 ++++++++++++-------
+ crates/claude_code_ide/src/tools.rs           | 42 +++++++++---
+ crates/zed/src/zed.rs                         |  4 +-
+ 5 files changed, 93 insertions(+), 46 deletions(-)
+
+diff --git a/crates/claude_code_ide/src/claude_code_ide.rs b/crates/claude_code_ide/src/claude_code_ide.rs
+index 59b3cf48a8..a3e9cdd26c 100644
+--- a/crates/claude_code_ide/src/claude_code_ide.rs
++++ b/crates/claude_code_ide/src/claude_code_ide.rs
+@@ -42,8 +42,7 @@ pub fn init(cx: &mut App) {
+             let workspace_id = cx.entity_id();
+             let workspace_handle = cx.entity().downgrade();
+             let window_handle = window.map(|window| window.window_handle());
+-            let server =
+-                cx.new(|cx| ClaudeCodeIdeServer::new(workspace_handle, window_handle, cx));
++            let server = cx.new(|cx| ClaudeCodeIdeServer::new(workspace_handle, window_handle, cx));
+             servers.borrow_mut().insert(workspace_id, server);
+ 
+             cx.on_release({
+@@ -93,7 +92,10 @@ impl ClaudeCodeIdeServer {
+                 }
+             }
+         });
+-        Self { port, _server_task: server_task }
++        Self {
++            port,
++            _server_task: server_task,
++        }
+     }
+ 
+     async fn run(
+@@ -123,9 +125,9 @@ impl ClaudeCodeIdeServer {
+         // to the Claude CLI via `CLAUDE_CODE_SSE_PORT`.
+         workspace
+             .update(cx, |workspace, cx| {
+-                workspace
+-                    .project()
+-                    .update(cx, |project, _| project.set_claude_code_ide_port(Some(port)));
++                workspace.project().update(cx, |project, _| {
++                    project.set_claude_code_ide_port(Some(port))
++                });
+             })
+             .context("publishing IDE port to project")?;
+ 
+@@ -138,7 +140,9 @@ impl ClaudeCodeIdeServer {
+             let dispatcher = WorkspaceDispatcher::new(workspace.clone(), window, cx.clone());
+             let auth_token = auth_token.clone();
+             cx.spawn(async move |_cx| {
+-                serve_connection(stream, auth_token, dispatcher).await.log_err();
++                serve_connection(stream, auth_token, dispatcher)
++                    .await
++                    .log_err();
+             })
+             .detach();
+         }
+diff --git a/crates/claude_code_ide/src/open_diff.rs b/crates/claude_code_ide/src/open_diff.rs
+index 14a3c799b9..7b7e3e2abd 100644
+--- a/crates/claude_code_ide/src/open_diff.rs
++++ b/crates/claude_code_ide/src/open_diff.rs
+@@ -15,8 +15,8 @@ use futures::channel::oneshot;
+ use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, DismissEvent, WeakEntity};
+ use language::Buffer;
+ use serde_json::{Value, json};
+-use ui::{Color, IconName};
+ use std::{cell::RefCell, rc::Rc};
++use ui::{Color, IconName};
+ use workspace::{
+     SaveIntent, SplitDirection, Workspace,
+     notifications::{NotificationId, simple_message_notification::MessageNotification},
+@@ -31,7 +31,12 @@ pub async fn open_diff(
+     arguments: Value,
+     cx: &mut AsyncApp,
+ ) -> Result<Value, ProtocolError> {
+-    let string_arg = |key: &str| arguments.get(key).and_then(Value::as_str).map(str::to_owned);
++    let string_arg = |key: &str| {
++        arguments
++            .get(key)
++            .and_then(Value::as_str)
++            .map(str::to_owned)
++    };
+ 
+     let old_file_path = string_arg("old_file_path")
+         .ok_or_else(|| ProtocolError::new(error_codes::INVALID_REQUEST, "missing old_file_path"))?;
+diff --git a/crates/claude_code_ide/src/server.rs b/crates/claude_code_ide/src/server.rs
+index 0a0aec0e35..f421db7cea 100644
+--- a/crates/claude_code_ide/src/server.rs
++++ b/crates/claude_code_ide/src/server.rs
+@@ -47,11 +47,18 @@ pub struct ProtocolError {
+ 
+ impl ProtocolError {
+     pub fn new(code: i32, message: impl Into<String>) -> Self {
+-        Self { code, message: message.into(), data: None }
++        Self {
++            code,
++            message: message.into(),
++            data: None,
++        }
+     }
+ 
+     pub fn method_not_found(method: &str) -> Self {
+-        Self::new(error_codes::METHOD_NOT_FOUND, format!("Method not found: {method}"))
++        Self::new(
++            error_codes::METHOD_NOT_FOUND,
++            format!("Method not found: {method}"),
++        )
+     }
+ 
+     pub fn internal(message: impl Into<String>) -> Self {
+@@ -110,18 +117,22 @@ where
+     // The handshake callback runs during the HTTP upgrade. We reject the
+     // connection unless it presents the exact token we wrote into the lock file,
+     // so only the CLI that read our lock file (same user) can connect.
+-    let authorize = move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+-        let presented = request.headers().get(AUTH_HEADER).map(|value| value.as_bytes());
+-        if presented == Some(auth_token.as_bytes()) {
+-            Ok(response)
+-        } else {
+-            let denied = http::Response::builder()
+-                .status(http::StatusCode::UNAUTHORIZED)
+-                .body(Some("invalid or missing authorization token".to_string()))
+-                .expect("static unauthorized response is valid");
+-            Err(denied)
+-        }
+-    };
++    let authorize =
++        move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
++            let presented = request
++                .headers()
++                .get(AUTH_HEADER)
++                .map(|value| value.as_bytes());
++            if presented == Some(auth_token.as_bytes()) {
++                Ok(response)
++            } else {
++                let denied = http::Response::builder()
++                    .status(http::StatusCode::UNAUTHORIZED)
++                    .body(Some("invalid or missing authorization token".to_string()))
++                    .expect("static unauthorized response is valid");
++                Err(denied)
++            }
++        };
+ 
+     let websocket = async_tungstenite::accept_hdr_async(stream, authorize)
+         .await
+@@ -141,7 +152,10 @@ where
+             }
+             // Reply to keepalive pings so the CLI doesn't consider us dead.
+             Message::Ping(payload) => {
+-                outgoing.send(Message::Pong(payload)).await.context("sending pong")?;
++                outgoing
++                    .send(Message::Pong(payload))
++                    .await
++                    .context("sending pong")?;
+             }
+             Message::Close(_) => break,
+             _ => {}
+@@ -171,10 +185,17 @@ pub async fn handle_message<D: Dispatcher>(raw: &str, dispatcher: &D) -> Option<
+ 
+     if parsed.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+         let id = parsed.get("id").cloned().unwrap_or(Value::Null);
+-        return Some(error_response(id, error_codes::INVALID_REQUEST, "Invalid Request"));
++        return Some(error_response(
++            id,
++            error_codes::INVALID_REQUEST,
++            "Invalid Request",
++        ));
+     }
+ 
+-    let method = parsed.get("method").and_then(Value::as_str).unwrap_or_default();
++    let method = parsed
++        .get("method")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
+     let params = parsed.get("params").cloned().unwrap_or(Value::Null);
+     let id = parsed.get("id").cloned();
+ 
+@@ -182,9 +203,7 @@ pub async fn handle_message<D: Dispatcher>(raw: &str, dispatcher: &D) -> Option<
+         // A request: the client expects a response carrying the same `id`.
+         Some(id) => Some(match route_request(method, params, dispatcher).await {
+             Ok(result) => success_response(id, result),
+-            Err(error) => {
+-                error_response_with_data(id, error.code, &error.message, error.data)
+-            }
++            Err(error) => error_response_with_data(id, error.code, &error.message, error.data),
+         }),
+         // A notification: fire-and-forget, no response.
+         None => {
+@@ -214,10 +233,9 @@ async fn route_request<D: Dispatcher>(
+         "resources/list" => Ok(json!({ "resources": [] })),
+         "tools/list" => Ok(json!({ "tools": dispatcher.tools() })),
+         "tools/call" => {
+-            let name = params
+-                .get("name")
+-                .and_then(Value::as_str)
+-                .ok_or_else(|| ProtocolError::new(error_codes::INVALID_REQUEST, "missing tool name"))?;
++            let name = params.get("name").and_then(Value::as_str).ok_or_else(|| {
++                ProtocolError::new(error_codes::INVALID_REQUEST, "missing tool name")
++            })?;
+             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+             dispatcher.call_tool(name, arguments).await
+         }
+diff --git a/crates/claude_code_ide/src/tools.rs b/crates/claude_code_ide/src/tools.rs
+index 2978e1b8d6..c446475589 100644
+--- a/crates/claude_code_ide/src/tools.rs
++++ b/crates/claude_code_ide/src/tools.rs
+@@ -29,7 +29,11 @@ impl WorkspaceDispatcher {
+         window: Option<AnyWindowHandle>,
+         cx: AsyncApp,
+     ) -> Self {
+-        Self { workspace, window, cx }
++        Self {
++            workspace,
++            window,
++            cx,
++        }
+     }
+ 
+     fn get_current_selection(&self, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
+@@ -99,7 +103,11 @@ impl WorkspaceDispatcher {
+         let folders = paths
+             .iter()
+             .map(|path| {
+-                let name = path.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
++                let name = path
++                    .rsplit('/')
++                    .next()
++                    .filter(|name| !name.is_empty())
++                    .unwrap_or(path);
+                 json!({ "name": name, "uri": format!("file://{path}"), "path": path })
+             })
+             .collect::<Vec<_>>();
+@@ -168,7 +176,11 @@ impl WorkspaceDispatcher {
+         Ok(mcp_text(json!({ "tabs": tabs })))
+     }
+ 
+-    fn get_diagnostics(&self, arguments: &Value, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
++    fn get_diagnostics(
++        &self,
++        arguments: &Value,
++        cx: &mut AsyncApp,
++    ) -> Result<Value, ProtocolError> {
+         let target = arguments
+             .get("uri")
+             .and_then(Value::as_str)
+@@ -279,8 +291,9 @@ impl WorkspaceDispatcher {
+         let path = required_path_field(&arguments, "filePath")?;
+         let start_line = arguments.get("startLine").and_then(Value::as_u64);
+         let end_line = arguments.get("endLine").and_then(Value::as_u64);
+-        let window =
+-            self.window.ok_or_else(|| ProtocolError::internal("no window available"))?;
++        let window = self
++            .window
++            .ok_or_else(|| ProtocolError::internal("no window available"))?;
+         let open_task = window
+             .update(cx, |_root, window, cx| {
+                 self.workspace.upgrade().map(|workspace| {
+@@ -296,7 +309,9 @@ impl WorkspaceDispatcher {
+             })
+             .map_err(|error| ProtocolError::internal(error.to_string()))?
+             .ok_or_else(|| ProtocolError::internal("workspace unavailable"))?;
+-        let item = open_task.await.map_err(|error| ProtocolError::internal(error.to_string()))?;
++        let item = open_task
++            .await
++            .map_err(|error| ProtocolError::internal(error.to_string()))?;
+ 
+         // Optionally select the requested line range (1-indexed in the protocol).
+         if let (Some(start), Some(end)) = (start_line, end_line) {
+@@ -306,9 +321,14 @@ impl WorkspaceDispatcher {
+                         editor.update(cx, |editor, cx| {
+                             let start = Point::new(start.saturating_sub(1) as u32, 0);
+                             let end = Point::new(end as u32, 0);
+-                            editor.change_selections(Default::default(), window, cx, |selections| {
+-                                selections.select_ranges([start..end]);
+-                            });
++                            editor.change_selections(
++                                Default::default(),
++                                window,
++                                cx,
++                                |selections| {
++                                    selections.select_ranges([start..end]);
++                                },
++                            );
+                         });
+                     }
+                 })
+@@ -343,7 +363,9 @@ impl WorkspaceDispatcher {
+                     .update(cx, |project, cx| project.save_buffer(buffer, cx))
+             })
+             .map_err(|error| ProtocolError::internal(error.to_string()))?;
+-        save_task.await.map_err(|error| ProtocolError::internal(error.to_string()))?;
++        save_task
++            .await
++            .map_err(|error| ProtocolError::internal(error.to_string()))?;
+         Ok(mcp_text(json!({ "success": true, "filePath": path })))
+     }
+ }
+diff --git a/crates/zed/src/zed.rs b/crates/zed/src/zed.rs
+index 385a61586c..a16fe1ccad 100644
+--- a/crates/zed/src/zed.rs
++++ b/crates/zed/src/zed.rs
+@@ -1447,9 +1447,7 @@ fn open_about_window(cx: &mut App) {
+                 include_bytes!("../resources/app-icon-preview.png").as_slice()
+             }
+             ReleaseChannel::Zeo => include_bytes!("../resources/app-icon-zeo.png").as_slice(),
+-            ReleaseChannel::Stable => {
+-                include_bytes!("../resources/app-icon.png").as_slice()
+-            }
++            ReleaseChannel::Stable => include_bytes!("../resources/app-icon.png").as_slice(),
+         };
+ 
+         Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec()))
+-- 
+2.55.0
+
