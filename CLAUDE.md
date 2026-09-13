@@ -24,8 +24,9 @@ repository was deleted and recreated as a plain, empty, non-fork repository.
 
 The reason is the one the rest of this tree already proved: **a patch series states what
 it changes and fails loudly when upstream moves; a fork accumulates a debt that grows
-with every release.** `zed-patches` has carried eighteen patches across daily snapshot
-bumps with `refresh.sh` preserving each patch's reasoning; the Zeo fork, on the same
+with every release.** `zed-patches` has carried sixteen patches - numbered to 0018, with
+real gaps - across daily snapshot bumps, `refresh.sh` preserving each patch's reasoning
+as it rebuilds the diff. The Zeo fork, on the same
 calendar, went three weeks without a rebase and was six snapshots behind when it was
 retired.
 
