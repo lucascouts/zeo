@@ -1,101 +1,37 @@
-# Upstream sync — procedure, pin policy, conflict playbook
+# Staying current
 
-Zeo is a rebase-based fork: the branch `zeo` is **upstream snapshot + patch commits +
-rebrand commits**. Keeping current means rebasing that stack onto a newer
-`upstream/main`. This is designed to be run daily and to **fail safely**.
+Zeo has no branch to sync. Staying current means the patch series still applies to the
+commit the ebuild packages — and that is `zed-patches`' job, not this repository's.
 
-See [`UPSTREAM.md`](UPSTREAM.md) for the fork base and remote topology.
-
-## The script
-
-```sh
-scripts/sync-upstream.sh [--repo <path>] [--to <ref>] [--build-cmd <cmd>]
+```bash
+cd zed-patches
+bash scripts/bump.sh            # refresh, verify, sync (dry run), check - writes nothing
+bash scripts/bump.sh --apply    # the same, and the sync writes for real
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--repo` | `fork` | the fork repository |
-| `--to` | `upstream/main` | ref to rebase onto |
-| `--build-cmd` | `cargo check` | the build gate run after the rebase |
+`bump.sh` discovers both versions, gates each step on the previous, and **stops at the
+ebuild**: which patches apply, under which USE flag, is the one part of a bump that
+encodes intent no script can infer.
 
-Everyday use:
+To ask whether anything has drifted without changing it:
 
-```sh
-./scripts/sync-upstream.sh
+```bash
+bash scripts/status.sh --offline        # from the workspace root
+bash zed-patches/scripts/check-sync.sh  # the patches alone
 ```
 
-The default gate is a fast `cargo check`. Use the real release build when you want a
-stronger guarantee (slower):
+## What survived from the fork era
 
-```sh
-./scripts/sync-upstream.sh \
-  --build-cmd 'RELEASE_CHANNEL=zeo cargo build --release --frozen -p zed -p cli'
-```
+The old model had a daily rebase with a build gate, and one rule worth carrying forward
+verbatim — **the tip never points at something that does not build.** On any failure the
+old script restored the last-good SHA rather than publishing a half-state.
 
-## Flow
+The patch model keeps the same discipline in a different shape: `verify.sh` applies the
+series to a prepared tree and compiles it, and a refreshed series that no longer matches
+the ebuild's `PATCHES+=()` makes `bump.sh` exit non-zero and say so. **That exit is the
+handoff to a human, not a failure** — deciding which patches apply is the part no script
+should guess.
 
-1. `git fetch <remote of --to>`
-2. Tag the current `zeo` tip as `zeo-pre-sync` (the rollback point)
-3. `git rebase <--to>` with `rerere` enabled
-4. Run the build gate in the repo
-5. On success: record the new tip in `<repo>/.git/zeo-last-good`, drop the tag
-
-## Outcomes
-
-| Outcome | Branch `zeo` | Exit | Left behind |
-|---|---|---|---|
-| **Clean** — rebase applies, gate passes | on the new upstream tip | `0` | `.git/zeo-last-good` = new tip |
-| **Conflict** — rebase hits a conflict | **unchanged**, at the last-good SHA | non-zero | nothing (rebase aborted, tag dropped) |
-| **Gate failure** — rebase applies, build breaks | **restored** to the pre-sync SHA | non-zero | nothing |
-
-In every outcome the script leaves **no `zeo-pre-sync` tag and no rebase state**, and the
-working tree clean (R5.4). The only artefact is the last-good marker.
-
-## Pin policy (D6)
-
-**A failed sync is non-blocking for users and blocking for the branch tip.** `zeo` never
-points at a commit that does not build: on any failure it stays pinned at the last-good
-SHA until a human resolves it. Nothing is force-pushed and no partial state is published.
-
-## Conflict playbook
-
-When the script reports a conflict, the rebase has already been aborted and `zeo` is back
-at its last-good SHA. Resolve it deliberately:
-
-```sh
-cd fork
-git fetch upstream
-git tag -f zeo-pre-sync zeo          # your own rollback point
-git rebase upstream/main             # let it stop on the conflict
-
-# ... resolve the conflicted files, then:
-git add -A
-git rebase --continue                # repeat until the rebase finishes
-
-# gate it before trusting the tip:
-RELEASE_CHANNEL=zeo cargo build --release --frozen -p zed -p cli
-
-# happy? drop the rollback tag. unhappy?  git reset --hard zeo-pre-sync
-git tag -d zeo-pre-sync
-```
-
-`rerere` is enabled in the fork, so each resolution you make is recorded and **replayed
-automatically** on the next rebase that hits the same conflict — daily syncs get cheaper
-over time.
-
-If a conflict is not worth resolving right now, simply do nothing: `zeo` stays on the last
-known-good snapshot and Zeo keeps building.
-
-## Where the patches live
-
-The overlay `.patch` files seeded the initial 7 commits and are **no longer the source of
-truth** (design D5). Changes now land as ordinary commits on `zeo`.
-
-## Tests
-
-The script's contract is pinned by an integration test that builds real git fixtures and
-exercises all three outcomes (clean, conflict, gate failure) plus the no-residue rule:
-
-```sh
-bash tests/sync-upstream.test.sh
-```
+> Everything else from that era is gone: `scripts/sync-upstream.sh`, the `rerere` cache,
+> the `zeo-pre-sync` rollback tag, the force-push-with-lease ritual. They belonged to a
+> branch that no longer exists. See [`../archive/README.md`](../archive/README.md).

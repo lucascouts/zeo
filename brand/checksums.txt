@@ -1,0 +1,13 @@
+# sha256 of the FINAL Zeo mark, as shipped.
+#
+# Story 002 replaced a 204 KB placeholder (72648be8…) with this 34 KB final
+# render; tasks.md records the move as "72648b… -> ca89f9…, weight 204KB -> 34KB".
+# The archived checksums-antes.txt holds the placeholder's hash and is the
+# BEFORE baseline, not a target - a file matching it is the old art.
+#
+# app-icon-zeo.png and the 512x512 hicolor icon are the same bytes by design:
+# the icon file name must equal the app_id for Wayland to resolve the window icon.
+ca89f90edc28c2a8d5fa98371d18a094160130eb12568ddeed40efd9ac97c1b8  rendered/app-icon-zeo.png
+ca89f90edc28c2a8d5fa98371d18a094160130eb12568ddeed40efd9ac97c1b8  rendered/hicolor/512x512/apps/dev.zeo.Zeo.png
+87d42f8eea154597c671a2397567bf8f76a3c18387467fba07af826ae68fab38  rendered/app-icon-zeo@2x.png
+87d42f8eea154597c671a2397567bf8f76a3c18387467fba07af826ae68fab38  rendered/hicolor/1024x1024/apps/dev.zeo.Zeo.png

@@ -7,7 +7,10 @@ URL scheme). This keeps the patch + rebrand stack rebasable onto daily upstream
 snapshots. Everything network/back-end (zed.dev servers) is **left as-is** — Zeo has no
 backend of its own in this story.
 
-All `fork/` paths below are relative to the fork repo (`fork/`, branch `zeo`).
+Paths below are relative to the **Zed source tree** — a tree `prepare-tree.sh` produces
+from the packaged commit. They were written when Zeo carried a fork and read `fork/…`;
+the fork is gone and the paths are otherwise unchanged, because what this document
+inventories is constants and decisions, and those do not care how the diff is delivered.
 
 ## 1. Changed — the rebrand commit block (5 commits)
 

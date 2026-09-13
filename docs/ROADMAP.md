@@ -1,6 +1,6 @@
 # ROADMAP — Zeo
 
-> A fork of [Zed](https://github.com/zed-industries/zed) with a visual purpose: a
+> A rebrand of [Zed](https://github.com/zed-industries/zed) with a visual purpose: a
 > beautiful, elegant, modern editor, with the ability to visually edit the UI and to
 > build extensions that have control over the interface. The name references Power
 > Rangers (Lord Zedd / the Zeo Crystal). No dates or deadlines — the schedule is ordered
@@ -11,19 +11,19 @@
 ## 1. Vision and pillars
 
 Zeo does **not replace** Zed — it expands and augments it visually, improving UI/UX.
-It is a downloadable, installable editor, openly a fork, built on three pillars:
+It is a downloadable, installable editor, openly a rebrand, built on three pillars:
 
 | Pillar | What | Technical path |
 |---|---|---|
-| **P1 — Identity** | An installable product with its own name, icon, channel, and state, coexisting with Zed | Shallow rebrand (minimal patches on the fork) |
+| **P1 — Identity** | An installable product with its own name, icon, channel, and state, coexisting with Zed | Shallow rebrand (a patch series over the packaged Zed) |
 | **P2 — Modern aesthetics** | A "Cursor-level" first impression: theme, design tokens, polished chrome | Native GPUI patches (path B in ZEO.md §6) |
 | **P3 — Visual extensibility** | WASM extensions with declarative control over UI (status bar, panels) + user-facing visual customization | Visual Extension API (path A in ZEO.md §5) |
 
 **Cross-cutting principles** (apply to every phase):
 
-- **Rebase cost is the real budget.** The base tracks `upstream/main` (daily snapshots).
-  Every decision prefers: append-only new code (new crates/dirs) > small hunks in stable
-  regions > never renaming internal crates.
+- **Refresh cost is the real budget.** The base is the commit the ebuild packages, and it
+  moves almost daily. Every decision prefers: append-only new code (new crates/dirs) >
+  small hunks in stable regions > never renaming internal crates.
 - **Dogfood the API.** Wherever the Visual Extension API reaches, Zeo's aesthetic
   features are born as first-party extensions — native patches only where the API cannot
   go (chrome).
@@ -42,9 +42,13 @@ map; the executable specification of each phase is born when its story is create
 sections below record the context and the specifications already known that will feed
 those stories.
 
+**Every phase ships as patches.** A story's output is one or more numbered patches in
+`zed-patches/patches/<PF>/`, applied by `app-editors/zeo`. Nothing here carries a branch
+of Zed, and no story may introduce one.
+
 ```mermaid
 graph LR
-    S001[001 Foundation] --> S002[002 Visual identity]
+    S001[001 Identity layer] --> S002[002 Visual identity]
     S002 --> S003[003 Modern chrome]
     S001 --> S004[004 Extension API P1]
     S004 --> S005[005 Extension API P2]
@@ -62,43 +66,40 @@ lost — its research is already done (ZEO.md §4-5).
 
 ## 3. Phases
 
-### 001 — Fork Foundation `[in execution]`
+### 001 — Identity layer `[to be re-specified]`
 
-**Objective.** The foundation of everything: a real git fork, minimal functional
-rebranding, the overlay patches incorporated, a release build, and a failure-safe sync
-workflow.
+**Objective.** Everything that makes a build of Zed *be* Zeo: its own name, channel,
+`app_id`, state directories, binary name, icon and URL scheme — as patches against the
+packaged commit.
 
-**Context.** Zed evolves daily; the bentoo overlay currently builds
-`zed-1.12.0_pre20260710` with 7 patches (0001, 0002, 0005-0009 — claude-agent/ACP
-integration). Zeo is born from the exact commit pinned by that ebuild (the patches apply
-cleanly there) and only then rebases onto the current `main`.
+**Context.** This story was executed once, in the fork era, as five commits against Zed
+snapshot `5f8a7413`. Those commits were lost when the fork repository was deleted on
+2026-09-12. What was **not** lost is their specification:
+[`REBRAND.md`](REBRAND.md) §1 documents all five, row by row, with the decision (D2, D3,
+D4, D9, D10) behind each. Re-specifying is cheaper than rebasing a six-snapshot-old diff
+would have been.
 
-**Specifications (approved — see `.epic/stories/001-zeo-fork-foundation/`):**
+**Known specification** — the touch points are small and measured:
 
-- Workspace (this repo) with `fork/` nested and gitignored; own `origin`, fetch-only
-  `upstream` (push `DISABLED`), `rerere` enabled.
-- The 7 patches become commits (`git am`, authorship preserved, all unconditional — the
-  0001/0002 pair with no USE-flag gate).
-- Shallow rebrand in 5 commits: `ReleaseChannel::Zeo` variant (exhaustive matches force
-  a conscious decision at every site: name "Zeo", app_id `dev.zeo.Zeo`, `zeo://`
-  scheme); auto-update neutralized + remote_server never downloading from zed.dev (the
-  error cites the real override — `ZED_COPY_REMOTE_SERVER` in this snapshot; see
-  `docs/REBRAND.md` §4); paths `~/.config/zeo` and `~/.local/share/zeo`; app binary
-  `zeo` (the CLI's cargo bin stays `cli`, exposed as the `zeo` command at packaging
-  time, story 007); desktop entry + placeholder icon (512/1024 px, original art — never
-  derived from the Zed mark; icon file name == app_id for Wayland).
-- Build: `cargo build --release --frozen`; upstream tests for the touched crates
-  (`release_channel`, `paths`, auto-update) + clippy; 8-item Wayland smoke checklist
-  (identity, coexistence with the installed Zed, 0007 badge, 0008 attachments, updater
-  message, `zeo://` handler).
-- Sync: `scripts/sync-upstream.sh` (`--repo/--to/--build-cmd`; fetch → `zeo-pre-sync`
-  tag → rebase → build gate → success writes `<repo>/.git/zeo-last-good`; conflict
-  aborts pinned; broken gate restores; no temporary state left behind) — contract pinned
-  by a pre-authored integration test (test-first). `docs/SYNC.md`, `docs/BUILD.md`,
-  `docs/REBRAND.md`, `docs/UPSTREAM.md`.
+- `crates/paths/src/paths.rs` — `APP_NAME` `"Zed"` → `"Zeo"`. **One line**, and upstream
+  invites it: *"Forks should change this to avoid colliding with Zed's user data."*
+  `APP_NAME_LOWERCASE` is derived from it in a `const`, so `~/.config/zeo`,
+  `~/.local/share/zeo`, cache, state and logs all follow. (D4)
+- `crates/zed/Cargo.toml` — `default-run` and `[[bin]] name` → `zeo`. **Two lines**; the
+  package and crate stay `zed`. (D9)
+- `crates/release_channel/src/lib.rs` — a `ReleaseChannel::Zeo` variant. The enum has
+  four today, and adding a fifth makes the compiler point at every exhaustive `match`
+  that needs an arm, with file and line. Mechanical, not archaeology. (D2)
+- auto-update neutralized and `remote_server` never fetching from zed.dev. (D3)
+- desktop entry, icons and the `zeo://` scheme — the art is finished and lives in
+  [`../brand/`](../brand/). Icon file name must equal `app_id` for Wayland to resolve the
+  window icon. (D10)
 
-**Key deliverable.** One full sync cycle: pinned snapshot → newer `upstream/main`, with
-the 12 commits (7 patches + 5 rebrand) surviving and a green build.
+**Hard boundaries.** Crate names stay `zed`; the WIT package `zed:extension` never
+changes — it is the ABI every existing Zed extension imports.
+
+**Key deliverable.** A Zeo that starts, identifies as itself, writes to its own state
+directories, and coexists with an installed `app-editors/zed`.
 
 ---
 
@@ -156,9 +157,11 @@ etc.): every patch must be small, isolated per component, and visually reviewabl
   (the "expand, don't replace" principle).
 - Each component delivers: an isolated patch + before/after screenshots + manual smoke.
 
-**Risks.** The highest rebase friction of the roadmap (hot files) — mitigated by minimal
-per-component patches and `rerere`; any upstream refactor of a patched component may
-require a re-port (the sync pin policy protects users meanwhile).
+**Risks.** The highest refresh friction of the roadmap (hot files) — mitigated by
+minimal, per-component patches, each carrying its reasoning in its `format-patch` header
+so a re-port starts from *why* rather than from the diff alone. An upstream refactor of a
+patched component still forces that re-port; meanwhile `verify.sh` fails loudly and the
+ebuild keeps naming the last series that applied.
 
 ---
 
@@ -250,35 +253,40 @@ local hacks.
 
 ---
 
-### 007 — Formal ebuild and distribution `[planned]`
+### 007 — Ebuild and distribution `[planned]`
 
-**Objective.** `app-editors/zeo` in the bentoo overlay as a formal package — Zeo
-installable "for real" on Gentoo, and the base for distribution beyond it.
+**Objective.** `app-editors/zeo` in the bentoo overlay, and a prebuilt Zeo for people who
+will not compile it.
 
-**Context.** Unlike the overlay's current Zed flow (snapshot + patch stack), the Zeo
-ebuild builds **directly from the `origin` repo** (a fork tag/commit) — no patches,
-because the fork is the source. The bentoo-dev workspace (ebuild/QA agents) handles the
-cycle.
+**Context.** This converges with work already specified for the patched Zed — the
+`zed-plus-bin` plan — because the two face the same problems: a binary that must run on
+CPUs that are not the build host's, a provenance record, and a corresponding-source
+obligation.
 
 **Planned specifications:**
 
-- Fork releases: `zeo-vX.Y.Z` tags on `origin` (own versioning + the matching upstream
-  snapshot recorded in release notes).
-- Ebuild: `SRC_URI` from the tag, `--frozen` build, the same env workarounds as
-  `docs/BUILD.md`, installation of the `zeo` binary + desktop entry + icons;
-  `metadata.xml`; clean QA (pkgcheck); `~amd64` keywords.
-- Packaged coexistence: no file collisions with `app-editors/zed` (blockers only if
-  necessary).
-- Installation documentation (Gentoo first; a generic binary tarball as a future
-  extra).
+- **Ebuild.** `app-editors/zeo`, sharing `zed-patches`' series and selecting its own
+  subset through `PATCHES+=()`. No file collision with `app-editors/zed`: the identity
+  layer already separates the binary (`zeo` vs `zedit`) and the state directories, which
+  is what makes coexistence work without a blocker. `metadata.xml`, clean `pkgcheck`,
+  `~amd64`.
+- **Prebuilt.** Built against a **generic `x86-64-v3`** baseline, never the build host's
+  microarchitecture — a `-march=znver5` binary raises `SIGILL` on any CPU without
+  AVX-512. A `pkg_pretend()` AVX2 check turns that silent crash into a clear message.
+- **Provenance and licence.** Each release carries the packaged commit, the patch series
+  with a sha256 per patch, the USE flags and the baseline; the corresponding source
+  travels with the binary (GPL-3 §6). `RESTRICT` must **not** carry `bindist`, which
+  would forbid the redistribution the release exists for.
+- **Cadence.** On demand, with its own version suffix. A cold build takes hours because
+  the generic flags miss nearly every `sccache` entry; promising to track the daily
+  snapshot would break in the first busy week.
 
 ---
-
 ## 4. Beyond the horizon (no story)
 
-- **Co-evolution with the ACP adapter** (the `claude-agent-fork` workspace): future
-  agent panel improvements land as normal commits on `zeo`, no longer via overlay
-  patches.
+- **Co-evolution with the ACP adapter** (the `claude-agent-plus` workspace): future
+  agent panel improvements land as patches in the shared series, which is also how they
+  reach the packaged Zed.
 - **Upstreaming**: if RFC #53403 advances in Zed, propose Zeo's API (004-005) as a
   prototype — the declarative design was chosen for this.
 - **API Phase 3** (per-instance panel identity, inputs, incremental refresh) — promoted
@@ -290,14 +298,18 @@ cycle.
 
 | Story | Phase | State |
 |---|---|---|
-| 001 | Fork Foundation | **In execution** (`.epic/stories/001-zeo-fork-foundation/`) |
-| 002 | Visual identity | Planned — next after 001 |
+| 001 | Identity layer | **To be re-specified** — executed once in the fork era, lost with it; spec intact in REBRAND.md §1 |
+| 002 | Visual identity | Nine commits exist as patches in `../archive/unpublished-commits/`, against snapshot `5f8a7413` — they need refreshing before adoption |
 | 003 | Modern chrome | Planned |
 | 004 | Extension API P1 (status bar) | Planned — research done (ZEO.md) |
 | 005 | Extension API P2 (panel) | Planned — research done (ZEO.md) |
 | 006 | UI customization | Planned |
-| 007 | Ebuild and distribution | Planned |
+| 007 | Ebuild and distribution | Planned — converges with the `zed-plus-bin` work |
 
-> References: [ZEO.md](ZEO.md) (complete technical research) ·
-> `.epic/stories/001-zeo-fork-foundation/` (executable spec for 001) ·
-> `docs/` (SYNC/BUILD/REBRAND/UPSTREAM, as delivered by 001).
+**Nothing is installable yet.** The honest summary is that Zeo has a finished mark, a
+complete specification, and no patch in the series.
+
+> References: [ZEO.md](ZEO.md) (complete technical research) · [REBRAND.md](REBRAND.md)
+> (the identity inventory, and the spec story 001 is rebuilt from) ·
+> [`../archive/`](../archive/) (the first run, including both stories' original
+> specifications).

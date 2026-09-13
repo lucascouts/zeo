@@ -1,44 +1,54 @@
-# zeo — workspace
+# zeo — the brand, and the plan that uses it
 
-A **rebranded fork of Zed** with a visual purpose: modern chrome, its own identity, and
-eventually a Visual Extension API letting extensions drive the UI. The plan is
-[`docs/ROADMAP.md`](docs/ROADMAP.md); the research behind the API is
-[`docs/ZEO.md`](docs/ZEO.md); the rebrand's touch points are
-[`docs/REBRAND.md`](docs/REBRAND.md).
+Zeo is a **rebranded Zed**, delivered as a patch series over the exact Zed commit the
+`bentoo` overlay packages. It is deliberately **not a fork**: there is no vendored Zed
+here, no branch to rebase, no merge debt. What this repository holds is the brand, the
+specification, and the reasoning — the patches themselves live in `zed-patches`.
 
 > **How this project relates to the others: [`../CLAUDE.md`](../CLAUDE.md).**
 
-**Status: archived and restarted (2026-08-23).** The first run is preserved under
-`ARCHIVED/` — see [`ARCHIVED/README.md`](ARCHIVED/README.md). The restart has produced
-nothing yet: `.epic/` is empty and only `docs/` is tracked.
+| | |
+|---|---|
+| the plan | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| what the rebrand touches, and why | [`docs/REBRAND.md`](docs/REBRAND.md) |
+| the Visual Extension API research | [`docs/ZEO.md`](docs/ZEO.md) |
+| the mark, and the script that builds it | [`brand/`](brand/) |
+| the first attempt, kept as a record | [`archive/`](archive/) |
 
-## How it differs from the rest of this tree
+## The shape changed on 2026-09-12, and every doc here had to follow
 
-Everything else here patches the *packaged* Zed — small diffs against the exact commit
-an ebuild names, verified by `zed-patches`. Zeo instead **carries a fork**, rebased onto
-upstream snapshots, and ships as its own installable editor with its own channel,
-app-id, state directories and binary name.
+Zeo's first run (2026-07 to 2026-08) **carried a fork**: a real GitHub fork of
+`zed-industries/zed`, branch `zeo`, a twelve-commit stack rebased onto a new upstream
+snapshot daily by `scripts/sync-upstream.sh`. That shape was abandoned, and the fork
+repository was deleted and recreated as a plain, empty, non-fork repository.
 
-The two approaches overlap by subject and not by method, and nothing links them today:
-no Zeo change reaches the `bentoo` overlay, and no patch from `zed-patches` is applied
-to the Zeo fork by any tooling. Whether they should converge is an open question, not a
-settled design.
+The reason is the one the rest of this tree already proved: **a patch series states what
+it changes and fails loudly when upstream moves; a fork accumulates a debt that grows
+with every release.** `zed-patches` has carried eighteen patches across daily snapshot
+bumps with `refresh.sh` preserving each patch's reasoning; the Zeo fork, on the same
+calendar, went three weeks without a rebase and was six snapshots behind when it was
+retired.
 
-## The first run was archived, then reduced
+**Read the git history of `docs/` before trusting an old sentence about Zeo.** Anything
+describing `fork/`, `upstream/main`, `rerere`, or a daily rebase is from the first run.
 
-`ARCHIVED/` held the first run — 332 MB, including a full Zed fork. It was removed on
-2026-08-27 after everything unique in it was extracted into
-[`first-run/`](first-run/README.md), 16 MB that this repository versions:
+## What survived the change, and what did not
 
-- the **nine commits** of story 002 that never reached `origin/zeo`, as patches proven
-  to reproduce the deleted tree byte for byte, plus a bundle keeping their exact hashes;
-- the **five art files** that had never been committed anywhere — the final crystal icon
-  and its SVG source;
-- the **epic specifications** for stories 001 and 002, which were versioned nowhere at
-  all before this;
-- the 104 icon-exploration renders, archived.
+| | |
+|---|---|
+| **the mark** | survived whole — `brand/build-icon.py` *constructs* it, so it is reproducible rather than merely stored |
+| **`docs/REBRAND.md`** | survived whole: it is an inventory of constants and decisions, and constants do not care how the diff is delivered |
+| **story 002's nine commits** | survived as `format-patch` in `archive/unpublished-commits/`, against snapshot `5f8a7413`; they need refreshing before adoption |
+| **story 001's five commits** | **did not survive** — they existed only in the deleted repository. `REBRAND.md` §1 documents all five, row by row, with rationale, so what was lost is the diff and not the reasoning |
+| **`scripts/sync-upstream.sh`** and its tests | gone with the fork model; `zed-patches`' `refresh.sh` and `bump.sh` do that job now |
 
-What was left behind was left behind on purpose: `docs/`, `scripts/`, `tests/` and the
-archive's own README are all in this repository's history at `d85d58f`.
+## Standing rules
 
-`fork/` stays gitignored: if the fork returns, it returns as its own repository.
+- **Crate names stay `zed`.** The rebrand is an identity layer — `APP_NAME`, the
+  `ReleaseChannel` variant, the `[[bin]]` name, icons, `.desktop`, `zeo://`. Renaming
+  crates buys nothing a user can see and costs a conflict on every refresh.
+- **The WIT package `zed:extension` never changes.** It is the ABI every Zed extension
+  imports; renaming it stops every existing extension from loading.
+- `.epic/` is never committed.
+- Written artefacts are in English.
+- Zeo is not affiliated with Zed Industries, and the README says so in those words.

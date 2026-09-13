@@ -1,2 +1,7 @@
 .epic
+
+# Kept as a guard, not as an expectation. Zeo no longer carries a fork of Zed --
+# it is a patch series (see CLAUDE.md). This line stays so that a Zed tree cloned
+# here for a one-off experiment cannot be committed by accident, and so that
+# ../scripts/status.sh keeps watching the path for exactly that case.
 fork/

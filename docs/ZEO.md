@@ -279,12 +279,13 @@ Verified GPUI apps ([awesome-gpui](https://github.com/zed-industries/awesome-gpu
 
 - **Overlay**: `/home/otaku/Projetos/git/bentoo/app-editors/zed/` — ebuild
   `zed-1.12.0_pre20260710-r1.ebuild`, patches in `files/` (0001, 0002, 0005-0009).
-- That workspace (`claude-agent-fork`) is the ACP adapter (fork/ + claude-agent-acp-plus/);
+- That workspace (`claude-agent-plus`) is the ACP adapter (fork/ + claude-agent-acp-plus/);
   the Zed patches live in the bentoo overlay, not there.
 - **Next step agreed as a suggestion** (not yet authorized/started at the time):
   formalize as a `.epic` story — design of `status-item.wit`, the panel JSON schema, an
   example extension for acceptance, then implement Phase 1 as patches 0010+ in the
   overlay. *(Superseded: the Zeo fork project absorbed this plan — see
   [ROADMAP.md](ROADMAP.md), stories 004-005.)*
-- Flow reminders: `.epic/` never committed (gitignored); no casual pushes in `fork/`
-  (the remote is the third-party upstream); adapter changes land in fork/ **and** plus/.
+- Flow reminders: `.epic/` never committed (gitignored); never push to
+  `zed-industries/zed`; Zeo changes land as patches in `zed-patches`, not as commits on a
+  branch of Zed.
